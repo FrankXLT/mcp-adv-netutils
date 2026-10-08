@@ -11,6 +11,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/mcp-adv-netutils 
 # Stage 2: Runtime image with traceroute & network utilities
 FROM alpine:3.21
 
+LABEL org.opencontainers.image.source="https://github.com/FrankXLT/mcp-adv-netutils"
+LABEL org.opencontainers.image.description="Advanced Network Utilities MCP Server (IEEE OUI, Traceroute, Port Scan, DNS, WOL)"
+LABEL org.opencontainers.image.licenses="MIT"
+
 RUN apk add --no-cache \
     ca-certificates \
     iputils \
