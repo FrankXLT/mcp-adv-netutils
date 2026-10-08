@@ -1,72 +1,224 @@
-# Network and domain utils MCP server `mcp-netutils`
+# Advanced Network Utilities MCP Server (`mcp-adv-netutils`)
 
-[![Github Downloads](https://img.shields.io/github/downloads/patrickdappollonio/mcp-netutils/total?color=orange&label=github%20downloads)](https://github.com/patrickdappollonio/mcp-netutils/releases)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Ffrankxlt%2Fmcp--adv--netutils-blue?logo=docker)](https://github.com/FrankXLT/mcp-adv-netutils/pkgs/container/mcp-adv-netutils)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> [!IMPORTANT]
->
-> This project is now called `mcp-netutils`. If you're upgrading, please update your references:
-> - **Docker images**: `ghcr.io/patrickdappollonio/mcp-netutils:latest`
-> - **Homebrew**: `patrickdappollonio/tap/mcp-netutils`
-> - **Configuration key**: Use `"netutils"` in your MCP server configuration
->
-> For more details about this change, see [issue #52](https://github.com/patrickdappollonio/mcp-domaintools/issues/52).
+`mcp-adv-netutils` is an advanced [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server engineered for high-fidelity physical network diagnostics, entity reconciliation, and Layer 1–Layer 7 infrastructure monitoring.
 
-<img src="https://i.imgur.com/cai3zrG.png" width="160" align="right" /> `mcp-netutils` is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server providing comprehensive network and domain analysis capabilities for AI assistants. It enables AI models to perform DNS lookups, WHOIS queries, connectivity testing, TLS certificate analysis, HTTP endpoint monitoring, and hostname resolution.
+Forked from [`patrickdappollonio/mcp-netutils`](https://github.com/patrickdappollonio/mcp-netutils), this enhanced edition introduces embedded IEEE OUI hardware manufacturer resolution, Layer 4 TCP port scanning, hop-by-hop route tracing, concurrent batch reverse DNS, and Wake-on-LAN (WOL) magic packet generation.
 
-For local DNS queries, it uses the system's configured DNS servers. For remote DNS queries, it uses Cloudflare DNS-over-HTTPS queries with a fallback to Google DNS-over-HTTPS. This is more than enough for most use cases.
+---
 
-For custom DNS-over-HTTPS servers, you can use the `--remote-server-address` flag. The server endpoint must implement the HTTP response format as defined by [RFC 8484](https://datatracker.ietf.org/doc/html/rfc8484#section-4.2).
+## Key Features & Architecture
 
-For custom WHOIS servers, you can use the `--custom-whois-server` flag. The server endpoint must implement the HTTP response format as defined by [RFC 3912](https://datatracker.ietf.org/doc/html/rfc3912), although plain text responses are also supported.
+- **Embedded High-Speed IEEE OUI Database**: Over 39,800 IEEE Organizationally Unique Identifiers (OUIs) pre-compiled and embedded directly into the Go binary (`//go:embed`) with gzip compression. Resolves hardware manufacturers in sub-millisecond time without external web API dependencies or rate limits.
+- **Virtual / Docker MAC Detection**: Inspects IEEE 802 Locally Administered Address (LAA) bit 1 (`XX:X2:...`, `XX:X6:...`, `XX:XA:...`, `XX:XE:...`, including Docker bridge `02:42:...`) to reliably distinguish physical hardware from virtual interfaces and container bridges.
+- **Layer 4 TCP Port Scanning**: Concurrent TCP connect handshakes against well-known ports (SSH, HTTP, HTTPS, RTSP, MQTT, Home Assistant, Portainer, etc.) or custom port ranges to determine active service listeners.
+- **Hop-by-Hop Traceroute**: System route tracing measuring hop RTT, packet loss, and automatic reverse PTR lookup per hop.
+- **Batch Reverse DNS**: High-concurrency reverse DNS PTR resolution for comma-separated IP address lists.
+- **Wake-on-LAN (WOL)**: UDP broadcast delivery of standard 102-byte Magic Packets to wake suspended physical nodes.
+- **Comprehensive DNS & HTTP Diagnostics**: Full support for local DNS, DoH (Cloudflare/Google), WHOIS, ICMP ping, HTTP ping with detailed breakdown (`dns`, `conn`, `tls`, `ttfb`, `total`), and TLS certificate chain inspection.
+- **Dual Transport (stdio & SSE)**: Runs in standard CLI stdio mode or as an HTTP Server-Sent Events (SSE) server for web integrations and containerized agentic pipelines.
 
-## Features
+---
 
-- **Local DNS Queries**: Perform DNS lookups using the OS-configured DNS servers
-- **Remote DNS-over-HTTPS**: Perform secure DNS queries via Cloudflare and Google DNS-over-HTTPS services
-- **WHOIS Lookups**: Perform WHOIS queries to get domain registration information
-- **Hostname Resolution**: Convert hostnames to their corresponding IP addresses (IPv4, IPv6, or both)
-- **Ping Operations**: Test connectivity and measure response times to hosts using ICMP
-- **HTTP Ping Operations**: Test HTTP endpoints and measure detailed response times including DNS, connection, TLS, and TTFB timing
-- **TLS Certificate Analysis**: Check TLS certificate chains for validity, expiration, and detailed certificate information
-- **Multiple Record Types**: Support for A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, and TXT record types
-- **Fallback Mechanism**: Automatically tries multiple DNS servers for reliable results
-- **SSE Support**: Run as an HTTP server with Server-Sent Events (SSE) for web-based integrations
+## Available MCP Tools (12 Total)
 
-## Installation
+| Tool Name | Scope | Description |
+| :--- | :--- | :--- |
+| **`mac_vendor_lookup`** | Hardware / L2 | Resolves MAC to IEEE OUI vendor and detects locally administered (LAA/Docker) MACs |
+| **`traceroute`** | Routing / L3 | Hop-by-hop route tracing isolating intermediate gateways, latency, and packet loss |
+| **`tcp_port_scan`** | Transport / L4 | Concurrent TCP connect handshakes on target ports to verify active service listeners |
+| **`dns_reverse_batch`**| Resolution / L7 | Batch-resolves PTR hostnames concurrently for a comma-separated list of IP addresses |
+| **`wol_wake`** | Power / L2 | Sends standard 102-byte Wake-on-LAN Magic Packet broadcast frames |
+| **`local_dns_query`** | Resolution / L7 | Queries local OS-configured DNS servers (`A`, `AAAA`, `CNAME`, `MX`, `NS`, `PTR`, `TXT`) |
+| **`remote_dns_query`**| Resolution / L7 | Performs secure DNS queries via Cloudflare and Google DNS-over-HTTPS |
+| **`whois_query`** | Registry / L7 | Performs WHOIS queries to retrieve domain registration metadata |
+| **`resolve_hostname`**| Resolution / L7 | Converts hostnames to IPv4, IPv6, or dual-stack addresses |
+| **`ping`** | Connectivity / L3 | Performs ICMP ping operations measuring round-trip time and packet loss |
+| **`http_ping`** | Application / L7 | Tests HTTP endpoints with microsecond timing breakdowns (`dns`, `conn`, `tls`, `ttfb`) |
+| **`tls_certificate_check`** | Security / L7 | Inspects TLS certificate chains, expiry dates, SANs, and issuer authorities |
 
-There are two ways to get this MCP server: you can use the Docker mode (which, if you have Docker installed, will automatically download and run the MCP server) or the binary options, both by getting one [from the releases page](https://github.com/patrickdappollonio/mcp-netutils/releases) or by [installing it with Homebrew for macOS and Linux](#homebrew-macos-and-linux).
+---
 
-### Editor Configuration
+## Tool Usage & Schema Reference
 
-Add the following configuration to your editor's settings to use `mcp-netutils` via the binary option:
+### 1. `mac_vendor_lookup`
+Resolves a MAC address to its hardware manufacturer using the embedded IEEE OUI registry and analyzes the IEEE 802 MAC address bit flags.
 
-```json5
+**Parameters:**
+- `mac` (string, required): Hardware MAC address in colon, hyphen, or dot-separated format (e.g., `44:61:32:00:11:22` or `02-42-C0-A8-03-A9`).
+
+**Example Response:**
+```json
+{
+  "mac": "44:61:32:00:11:22",
+  "normalized_mac": "44:61:32:00:11:22",
+  "oui": "44:61:32",
+  "vendor": "ecobee inc",
+  "is_locally_administered": false,
+  "address_type": "unicast_uaa"
+}
+```
+
+When checking a Docker bridge or virtual container MAC:
+```json
+{
+  "mac": "02:42:c0:a8:03:a9",
+  "normalized_mac": "02:42:c0:a8:03:a9",
+  "oui": "02:42:c0",
+  "vendor": "Locally Administered / Virtual (Docker / VM)",
+  "is_locally_administered": true,
+  "address_type": "unicast_laa"
+}
+```
+
+---
+
+### 2. `traceroute`
+Executes hop-by-hop network path tracing to isolate routing issues, latency spikes, and intermediate gateway hops.
+
+**Parameters:**
+- `target` (string, required): Destination hostname or IP address (e.g. `example.com` or `192.0.2.1`).
+- `max_hops` (integer, optional, default: `30`): Maximum time-to-live / hop count.
+- `timeout` (string, optional, default: `"2s"`): Per-probe timeout.
+
+**Example Response:**
+```json
+{
+  "target": "example.com",
+  "ip": "93.184.215.14",
+  "total_hops": 8,
+  "hops": [
+    { "hop": 1, "host": "gateway.homelab.local", "ip": "192.0.2.1", "rtt_ms": 0.42 },
+    { "hop": 2, "host": "isp-gw.example.net", "ip": "198.51.100.1", "rtt_ms": 4.15 }
+  ]
+}
+```
+
+---
+
+### 3. `tcp_port_scan`
+Performs rapid Layer 4 TCP connection handshakes to detect open services and identify listening daemons.
+
+**Parameters:**
+- `target` (string, required): Destination hostname or IP address.
+- `ports` (string, optional, default: `"common"`): Comma-separated list of ports (`"22,80,443,8000"`) or preset `"common"`.
+  - Preset `"common"` tests: `21, 22, 53, 80, 443, 554, 1883, 3000, 5000, 8000, 8080, 8123, 8443, 9000, 9443`.
+- `timeout` (string, optional, default: `"1.5s"`): Socket connection timeout per probe.
+
+**Example Response:**
+```json
+{
+  "target": "192.0.2.50",
+  "open_ports": [
+    { "port": 22, "service": "ssh" },
+    { "port": 8123, "service": "homeassistant" }
+  ],
+  "total_scanned": 15
+}
+```
+
+---
+
+### 4. `dns_reverse_batch`
+Resolves PTR hostnames concurrently across a batch of IP addresses.
+
+**Parameters:**
+- `ips` (string, required): Comma-separated list of IPv4/IPv6 addresses (e.g. `"192.0.2.1, 192.0.2.10, 192.0.2.20"`).
+
+**Example Response:**
+```json
+{
+  "results": {
+    "192.0.2.1": "gateway.homelab.local",
+    "192.0.2.10": "storage-nas.homelab.local",
+    "192.0.2.20": "switch-core.homelab.local"
+  },
+  "unresolved": []
+}
+```
+
+---
+
+### 5. `wol_wake`
+Constructs and broadcasts a 102-byte standard Wake-on-LAN Magic Packet frame (`6x 0xFF` followed by 16 iterations of the target MAC address) over UDP.
+
+**Parameters:**
+- `mac` (string, required): Hardware MAC address of the target machine.
+- `broadcast_ip` (string, optional, default: `"255.255.255.255"`): Subnet broadcast address (e.g. `"192.0.2.255"`).
+- `port` (integer, optional, default: `9`): Destination UDP port (`7` or `9`).
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "mac": "bc:24:11:80:a2:14",
+  "broadcast": "192.0.2.255:9",
+  "bytes_sent": 102
+}
+```
+
+---
+
+## Deployment & Setup
+
+### Docker Compose / Portainer Deployment
+
+Deploy `mcp-adv-netutils` as a standalone microservice exposing the SSE endpoint on port `8000`:
+
+```yaml
+version: '3.8'
+
+services:
+  mcp-adv-netutils:
+    image: ghcr.io/frankxlt/mcp-adv-netutils:latest
+    container_name: mcp-adv-netutils
+    restart: unless-stopped
+    command: ["-sse", "-sse-port", "8000"]
+    ports:
+      - "8000:8000"
+    networks:
+      - internal_net
+
+networks:
+  internal_net:
+    driver: bridge
+```
+
+### Docker CLI Run
+
+Run directly in SSE mode:
+
+```bash
+docker run -d \
+  --name mcp-adv-netutils \
+  -p 8000:8000 \
+  ghcr.io/frankxlt/mcp-adv-netutils:latest \
+  -sse -sse-port 8000
+```
+
+Run in interactive CLI `stdio` mode:
+
+```bash
+docker run -i --rm ghcr.io/frankxlt/mcp-adv-netutils:latest
+```
+
+### Client Configuration (`claude_desktop_config.json` / Antigravity)
+
+#### Option A: Server-Sent Events (SSE) via Supergateway or Direct HTTP
+```json
 {
   "mcpServers": {
     "netutils": {
-      "command": "mcp-netutils",
-      "args": [
-        // Uncomment and modify as needed:
-        // "--remote-server-address=https://your-custom-doh-server.com/dns-query",
-        // "--custom-whois-server=whois.yourdomain.com",
-        // "--timeout=5s",
-        // "--ping-timeout=5s",
-        // "--ping-count=4",
-        // "--http-ping-timeout=10s",
-        // "--http-ping-count=1",
-        // "--tls-timeout=10s"
-      ],
-      "env": {}
+      "url": "http://mcp-adv-netutils.lan:8000/sse"
     }
   }
 }
 ```
 
-You can use `mcp-netutils` directly from your `$PATH` as shown above, or provide the full path to the binary (e.g., `/path/to/mcp-netutils`).
-
-Alternatively, you can run `mcp-netutils` directly with Docker without installing the binary:
-
-```json5
+#### Option B: Stdio Local Execution
+```json
 {
   "mcpServers": {
     "netutils": {
@@ -75,282 +227,35 @@ Alternatively, you can run `mcp-netutils` directly with Docker without installin
         "run",
         "-i",
         "--rm",
-        "ghcr.io/patrickdappollonio/mcp-netutils:latest",
-        // Add custom options if needed:
-        // "--remote-server-address=https://your-custom-doh-server.com/dns-query",
-        // "--custom-whois-server=whois.yourdomain.com",
-        // "--timeout=5s",
-        // "--ping-timeout=5s",
-        // "--ping-count=4",
-        // "--http-ping-timeout=10s",
-        // "--http-ping-count=1",
-        // "--tls-timeout=10s"
-      ],
-      "env": {}
+        "ghcr.io/frankxlt/mcp-adv-netutils:latest"
+      ]
     }
   }
 }
 ```
 
-See ["Available MCP Tools"](#available-mcp-tools) for information on the tools exposed by `mcp-netutils`.
+---
 
-### Homebrew (macOS and Linux)
+## Building from Source
 
-```bash
-brew install patrickdappollonio/tap/mcp-netutils
-```
-
-### Docker
-
-The MCP server is available as a Docker image using `stdio` to communicate:
+Requirements:
+- Go 1.22+ installed
+- Standard build toolchain (`make`, `git`)
 
 ```bash
-docker pull ghcr.io/patrickdappollonio/mcp-netutils:latest
-docker run --rm ghcr.io/patrickdappollonio/mcp-netutils:latest
+# Clone the repository
+git clone https://github.com/FrankXLT/mcp-adv-netutils.git
+cd mcp-adv-netutils
+
+# Build binary
+CGO_ENABLED=0 go build -ldflags="-s -w" -o mcp-adv-netutils main.go
+
+# Run locally
+./mcp-adv-netutils -sse -sse-port 8000
 ```
 
-For SSE mode with Docker, expose the SSE port (default `3000`):
+---
 
-```bash
-docker run --rm -p 3000:3000 ghcr.io/patrickdappollonio/mcp-netutils:latest --sse --sse-port 3000
-```
+## License
 
-Check the implementation above on how to configure the MCP server to run as a container in your editor or tool.
-
-### GitHub Releases
-
-Download the pre-built binaries for your platform from the [GitHub Releases page](https://github.com/patrickdappollonio/mcp-netutils/releases).
-
-## Available MCP Tools
-
-There are **7 tools** available:
-
-- **`local_dns_query`**: Perform DNS queries against the local DNS resolver as configured by the OS
-- **`remote_dns_query`**: Perform DNS queries against a remote DNS-over-HTTPS server (Cloudflare/Google)
-- **`whois_query`**: Perform WHOIS lookups to get domain registration information
-- **`resolve_hostname`**: Convert a hostname to its corresponding IP addresses (IPv4, IPv6, or both)
-- **`ping`**: Perform ICMP ping operations to test connectivity and measure response times to hosts
-- **`http_ping`**: Perform HTTP ping operations to test HTTP endpoints and measure detailed response times
-- **`tls_certificate_check`**: Check TLS certificate chain for a domain to analyze certificate validity, expiration, and chain structure
-
-## Running Modes
-
-### Standard (stdio) Mode
-
-By default, `mcp-netutils` runs in stdio mode, which is suitable for integration with editors and other tools that communicate via standard input/output.
-
-```bash
-mcp-netutils
-```
-
-### Server-Sent Events (SSE) Mode
-
-Alternatively, you can run `mcp-netutils` as an HTTP server with SSE support for web-based integrations:
-
-```bash
-mcp-netutils --sse --sse-port=3000
-```
-
-In SSE mode, the server will listen on the specified port (default: 3000) and provide the same MCP tools over HTTP using Server-Sent Events. This is useful for web applications or environments where stdio communication isn't practical.
-
-## Configuration Options
-
-The following command-line flags are available to configure the MCP server:
-
-### General Options
-- `--timeout=DURATION`: Timeout for DNS queries (default: 5s)
-- `--remote-server-address=URL`: Custom DNS-over-HTTPS server address
-- `--custom-whois-server=ADDRESS`: Custom WHOIS server address
-
-### Ping Options
-- `--ping-timeout=DURATION`: Timeout for ping operations (default: 5s)
-- `--ping-count=NUMBER`: Default number of ping packets to send (default: 4)
-
-### HTTP Ping Options
-- `--http-ping-timeout=DURATION`: Timeout for HTTP ping operations (default: 10s)
-- `--http-ping-count=NUMBER`: Default number of HTTP ping requests to send (default: 1)
-
-### TLS Options
-- `--tls-timeout=DURATION`: Timeout for TLS certificate checks (default: 10s)
-
-### SSE Server Options
-- `--sse`: Enable SSE server mode
-- `--sse-port=PORT`: Specify the port to listen on (default: 3000)
-
-## Tool Usage Documentation
-
-### Local DNS Query
-
-Performs DNS queries using local OS-defined DNS servers.
-
-**Arguments:**
-- `domain` (required): The domain name to query (e.g., `example.com`)
-- `record_type` (required): Type of DNS record to query - defaults to `A`
-  - Supported types: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `PTR`, `SOA`, `SRV`, `TXT`
-
-**Example:**
-```bash
-# Query A record for example.com
-{"domain": "example.com", "record_type": "A"}
-
-# Query MX records for a domain
-{"domain": "example.com", "record_type": "MX"}
-```
-
-### Remote DNS Query
-
-Performs DNS queries using remote DNS-over-HTTPS servers (Cloudflare as primary, Google as fallback).
-
-**Arguments:**
-- `domain` (required): The domain name to query (e.g., `example.com`)
-- `record_type` (required): Type of DNS record to query - defaults to `A`
-  - Supported types: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `PTR`, `SOA`, `SRV`, `TXT`
-
-**Example:**
-```bash
-# Query A record using remote DNS-over-HTTPS
-{"domain": "example.com", "record_type": "A"}
-```
-
-### WHOIS Query
-
-Performs WHOIS lookups to get domain registration information.
-
-**Arguments:**
-- `domain` (required): The domain name to query (e.g., `example.com`)
-
-**Example:**
-```bash
-# Get WHOIS information for a domain
-{"domain": "example.com"}
-```
-
-### Hostname Resolution
-
-Converts a hostname to its corresponding IP addresses using the system resolver.
-
-**Arguments:**
-- `hostname` (required): The hostname to resolve (e.g., `example.com`)
-- `ip_version` (optional): IP version to resolve - defaults to `ipv4`
-  - Options: `ipv4`, `ipv6`, `both`
-
-**Example:**
-```bash
-# Resolve to IPv4 addresses only
-{"hostname": "example.com", "ip_version": "ipv4"}
-
-# Resolve to both IPv4 and IPv6
-{"hostname": "example.com", "ip_version": "both"}
-```
-
-### Ping
-
-Performs ICMP ping operations to test connectivity and measure response times to hosts.
-
-**Arguments:**
-- `target` (required): The hostname or IP address to ping (e.g., `example.com` or `8.8.8.8`)
-- `count` (optional): Number of ping packets to send - defaults to `4`
-
-**Example:**
-```bash
-# Ping a host 4 times (default)
-{"target": "example.com"}
-
-# Ping a host 10 times
-{"target": "8.8.8.8", "count": 10}
-```
-
-### HTTP Ping
-
-Performs HTTP ping operations to test HTTP endpoints and measure detailed response times.
-
-**Arguments:**
-- `url` (required): The URL to ping (e.g., `https://api.example.com/users`)
-- `method` (optional): HTTP method to use - defaults to `GET`
-  - Supported methods: `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, `OPTIONS`, `PATCH`
-- `count` (optional): Number of HTTP requests to send - defaults to `1`
-
-**Response Format:**
-The tool returns detailed timing information in a one-liner format:
-```
-GET https://api.example.com/users 200 OK | dns=42ms conn=156ms tls=298ms ttfb=567ms total=623ms
-```
-
-**Timing Measurements:**
-- `dns`: DNS resolution time
-- `conn`: TCP connection establishment time
-- `tls`: TLS handshake time (only for HTTPS URLs)
-- `ttfb`: Time to first byte (server response time)
-- `total`: Total request time
-
-**Example:**
-```bash
-# Single GET request
-{"url": "https://httpbin.org/get"}
-
-# Multiple POST requests
-{"url": "https://httpbin.org/post", "method": "POST", "count": 3}
-
-# Test API endpoint
-{"url": "https://api.github.com/users/octocat"}
-```
-
-### TLS Certificate Check
-
-Checks TLS certificate chain for a domain to analyze certificate validity, expiration, and chain structure.
-
-**Arguments:**
-- `domain` (required): The domain name to check TLS certificate for (e.g., `example.com`)
-- `port` (optional): Port to connect to for TLS check - defaults to `443`
-- `include_chain` (optional): Whether to include the full certificate chain in the response - defaults to `true`
-- `check_expiry` (optional): Whether to check certificate expiration and provide warnings - defaults to `true`
-- `server_name` (optional): Server name for SNI (Server Name Indication) - defaults to the domain name
-
-**Example:**
-```bash
-# Check TLS certificate for domain
-{"domain": "example.com"}
-
-# Check TLS certificate on custom port
-{"domain": "example.com", "port": 8443}
-
-# Check without certificate chain details
-{"domain": "example.com", "include_chain": false}
-```
-
-## Examples
-
-### Basic Usage Examples
-
-```bash
-# Start the MCP server in stdio mode
-mcp-netutils
-
-# Start with custom DNS timeout
-mcp-netutils --timeout=10s
-
-# Start with custom HTTP ping settings
-mcp-netutils --http-ping-timeout=15s --http-ping-count=3
-
-# Start in SSE mode on port 8080
-mcp-netutils --sse --sse-port=8080
-```
-
-### Advanced Configuration Examples
-
-```bash
-# Use custom DNS-over-HTTPS server
-mcp-netutils --remote-server-address=https://dns.quad9.net/dns-query
-
-# Use custom WHOIS server
-mcp-netutils --custom-whois-server=whois.custom.com
-
-# Combine multiple options
-mcp-netutils \
-  --timeout=10s \
-  --ping-timeout=3s \
-  --ping-count=3 \
-  --http-ping-timeout=15s \
-  --http-ping-count=2 \
-  --tls-timeout=30s
-```
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
