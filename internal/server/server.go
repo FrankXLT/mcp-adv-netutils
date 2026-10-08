@@ -10,10 +10,14 @@ import (
 	"github.com/miekg/dns"
 	internaldns "github.com/patrickdappollonio/mcp-netutils/internal/dns"
 	"github.com/patrickdappollonio/mcp-netutils/internal/http_ping"
+	"github.com/patrickdappollonio/mcp-netutils/internal/mac_lookup"
 	"github.com/patrickdappollonio/mcp-netutils/internal/ping"
+	"github.com/patrickdappollonio/mcp-netutils/internal/port_scan"
 	"github.com/patrickdappollonio/mcp-netutils/internal/resolver"
 	"github.com/patrickdappollonio/mcp-netutils/internal/tls"
+	"github.com/patrickdappollonio/mcp-netutils/internal/traceroute"
 	"github.com/patrickdappollonio/mcp-netutils/internal/whois"
+	"github.com/patrickdappollonio/mcp-netutils/internal/wol"
 )
 
 // NetUtilsConfig contains configuration for the network utilities.
@@ -186,6 +190,79 @@ func SetupTools(config *NetUtilsConfig) (*server.MCPServer, error) {
 		),
 	)
 
+	// Add MAC vendor lookup tool (IEEE OUI + LAA detection)
+	macLookupTool := mcp.NewTool("mac_vendor_lookup",
+		mcp.WithDescription("Perform an IEEE OUI vendor lookup and detect locally administered (LAA / virtual / Docker) MAC addresses"),
+		mcp.WithString("mac",
+			mcp.Required(),
+			mcp.Description("The MAC address to lookup (e.g. 9C:8E:CD:0A:91:0C, 44-61-32-11-22-33, or raw hex)"),
+		),
+	)
+
+	// Add traceroute tool
+	tracerouteTool := mcp.NewTool("traceroute",
+		mcp.WithDescription("Execute hop-by-hop route tracing to isolate intermediate gateways, network latency, and packet loss"),
+		mcp.WithString("target",
+			mcp.Required(),
+			mcp.Description("Destination IPv4, IPv6, or hostname (e.g. 1.1.1.1 or example.com)"),
+		),
+		mcp.WithNumber("max_hops",
+			mcp.Description("Maximum number of hops (TTL ceiling, 1-30); defaults to 15"),
+			mcp.DefaultNumber(15),
+		),
+		mcp.WithNumber("timeout_seconds",
+			mcp.Description("Probe timeout per hop in seconds; defaults to 2"),
+			mcp.DefaultNumber(2),
+		),
+	)
+
+	// Add TCP port scan tool
+	portScanTool := mcp.NewTool("tcp_port_scan",
+		mcp.WithDescription("Perform fast Layer 4 TCP connect handshakes on target ports to verify active service listeners"),
+		mcp.WithString("target",
+			mcp.Required(),
+			mcp.Description("The target hostname or IP address (e.g. 192.168.1.1 or example.com)"),
+		),
+		mcp.WithString("ports",
+			mcp.Required(),
+			mcp.Description("Comma-separated ports or range to probe (e.g. '22,80,443,1883,8123' or '80-90')"),
+		),
+		mcp.WithNumber("timeout_ms",
+			mcp.Description("Timeout per port in milliseconds; defaults to 1000"),
+			mcp.DefaultNumber(1000),
+		),
+	)
+
+	// Add reverse DNS batch lookup tool
+	dnsBatchTool := mcp.NewTool("dns_reverse_batch",
+		mcp.WithDescription("Batch-resolve PTR reverse DNS hostnames concurrently for a comma-separated list of IP addresses"),
+		mcp.WithString("ips",
+			mcp.Required(),
+			mcp.Description("Comma-separated list of IP addresses to resolve (e.g. '192.168.1.1, 192.168.1.105')"),
+		),
+		mcp.WithNumber("timeout_ms",
+			mcp.Description("Timeout per lookup in milliseconds; defaults to 3000"),
+			mcp.DefaultNumber(3000),
+		),
+	)
+
+	// Add Wake-on-LAN tool
+	wolTool := mcp.NewTool("wol_wake",
+		mcp.WithDescription("Send a Wake-on-LAN Magic Packet broadcast frame to wake a physical machine or server"),
+		mcp.WithString("mac",
+			mcp.Required(),
+			mcp.Description("Target machine MAC address to wake (e.g. 00:11:32:XX:YY:ZZ)"),
+		),
+		mcp.WithString("broadcast_ip",
+			mcp.Description("Broadcast destination IP; defaults to 255.255.255.255"),
+			mcp.DefaultString("255.255.255.255"),
+		),
+		mcp.WithNumber("port",
+			mcp.Description("Target UDP port; defaults to 9"),
+			mcp.DefaultNumber(9),
+		),
+	)
+
 	// Create handler wrappers
 	localDNSHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return internaldns.HandleLocalDNSQuery(ctx, request, config.QueryConfig)
@@ -215,6 +292,26 @@ func SetupTools(config *NetUtilsConfig) (*server.MCPServer, error) {
 		return http_ping.HandleHTTPPing(ctx, request, config.HTTPPingConfig)
 	}
 
+	macLookupHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mac_lookup.HandleMACLookup(ctx, request)
+	}
+
+	tracerouteHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return traceroute.HandleTraceroute(ctx, request)
+	}
+
+	portScanHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return port_scan.HandlePortScan(ctx, request)
+	}
+
+	dnsBatchHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return internaldns.HandleReverseDNSBatch(ctx, request, config.QueryConfig)
+	}
+
+	wolHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return wol.HandleWakeOnLAN(ctx, request)
+	}
+
 	// Add handlers for the tools
 	s.AddTool(localQueryTool, localDNSHandler)
 	s.AddTool(remoteQueryTool, remoteDNSHandler)
@@ -223,6 +320,11 @@ func SetupTools(config *NetUtilsConfig) (*server.MCPServer, error) {
 	s.AddTool(pingTool, pingHandler)
 	s.AddTool(tlsCheckTool, tlsCheckHandler)
 	s.AddTool(httpPingTool, httpPingHandler)
+	s.AddTool(macLookupTool, macLookupHandler)
+	s.AddTool(tracerouteTool, tracerouteHandler)
+	s.AddTool(portScanTool, portScanHandler)
+	s.AddTool(dnsBatchTool, dnsBatchHandler)
+	s.AddTool(wolTool, wolHandler)
 
 	return s, nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -365,4 +366,82 @@ func createDNSResponse(response *dns.Msg) map[string]any {
 	}
 
 	return result
+}
+
+// ReverseDNSBatchParams holds the inputs for batch reverse DNS lookups.
+type ReverseDNSBatchParams struct {
+	IPs       string `json:"ips"` // Comma-separated list of IP addresses
+	TimeoutMS *int   `json:"timeout_ms,omitempty"`
+}
+
+// ReverseDNSBatchResponse holds the results of batch reverse DNS lookups.
+type ReverseDNSBatchResponse struct {
+	Results   map[string]*string `json:"results"`
+	Count     int                `json:"count"`
+	Timestamp string             `json:"timestamp"`
+}
+
+// HandleReverseDNSBatch concurrently resolves PTR records for multiple IP addresses.
+func HandleReverseDNSBatch(ctx context.Context, request mcp.CallToolRequest, config *QueryConfig) (*mcp.CallToolResult, error) {
+	var params ReverseDNSBatchParams
+	if err := request.BindArguments(&params); err != nil {
+		return nil, fmt.Errorf("failed to parse tool input: %w", utils.ParseJSONUnmarshalError(err))
+	}
+
+	rawIPs := strings.FieldsFunc(params.IPs, func(r rune) bool {
+		return r == ',' || r == '\n' || r == ' ' || r == '\t' || r == ';'
+	})
+
+	if len(rawIPs) == 0 {
+		return nil, fmt.Errorf("parameter \"ips\" cannot be empty")
+	}
+
+	timeout := 3 * time.Second
+	if params.TimeoutMS != nil && *params.TimeoutMS > 100 && *params.TimeoutMS <= 10000 {
+		timeout = time.Duration(*params.TimeoutMS) * time.Millisecond
+	}
+
+	results := make(map[string]*string)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 20) // max 20 concurrent lookups
+
+	for _, rawIP := range rawIPs {
+		ipStr := strings.TrimSpace(rawIP)
+		if ipStr == "" {
+			continue
+		}
+
+		wg.Add(1)
+		go func(targetIP string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			resolver := &net.Resolver{}
+			lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			names, err := resolver.LookupAddr(lookupCtx, targetIP)
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err == nil && len(names) > 0 {
+				host := strings.TrimSuffix(names[0], ".")
+				results[targetIP] = &host
+			} else {
+				results[targetIP] = nil
+			}
+		}(ipStr)
+	}
+
+	wg.Wait()
+
+	response := ReverseDNSBatchResponse{
+		Results:   results,
+		Count:     len(results),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	return resp.JSON(response)
 }
