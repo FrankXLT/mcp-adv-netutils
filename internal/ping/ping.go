@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -170,7 +171,7 @@ func performPing(ctx context.Context, target string, ip net.IP, count int, timeo
 	defer func() {
 		if closeErr := conn.Close(); closeErr != nil {
 			// Log error but don't fail the operation
-			fmt.Printf("Warning: failed to close connection: %v\n", closeErr)
+			fmt.Fprintf(os.Stderr, "Warning: failed to close connection: %v\n", closeErr)
 		}
 	}()
 
@@ -311,7 +312,7 @@ connectLoop:
 			if err == nil {
 				if closeErr := conn.Close(); closeErr != nil {
 					// Log error but continue with the operation
-					fmt.Printf("Warning: failed to close TCP connection: %v\n", closeErr)
+					fmt.Fprintf(os.Stderr, "Warning: failed to close TCP connection: %v\n", closeErr)
 				}
 				connected = true
 				break
