@@ -3,11 +3,11 @@
 # Two-Tick Alert Hysteresis applies globally: alerts trigger only after >= 2 consecutive non-OK ticks.
 
 jobs:
-  - id: wan-canary-ping
+  - id: wan-public-dns-ping
     schedule: "*/5 * * * *"
     tool: recipe_diff_ping
     target: "1.1.1.1"
-    description: "Differential reachability ladder (Local NIC -> Gateway -> WAN Peer -> Canary)"
+    description: "Differential reachability ladder (Local Adapter -> Gateway -> WAN Peer -> Public DNS)"
     enabled: true
 
   - id: wg-mtu-check

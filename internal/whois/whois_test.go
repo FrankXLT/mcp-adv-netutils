@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,5 +215,42 @@ func TestExecute_ContextCancellationAndTimeout(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, res)
 		assert.True(t, errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "WHOIS query failed"))
+	})
+}
+
+func TestExecute_GuardDialer(t *testing.T) {
+	t.Run("denies private CustomServer without dialing", func(t *testing.T) {
+		var dialed atomic.Bool
+		addr := startMockWhoisServer(t, func(conn net.Conn) {
+			dialed.Store(true)
+			_ = conn.Close()
+		})
+
+		guard, err := security.NewTargetGuardWithOptions(nil, nil, true)
+		require.NoError(t, err)
+
+		res, err := Execute(context.Background(), WhoisQueryParams{Domain: "8.8.8.8"}, &Config{
+			CustomServer: addr,
+			Timeout:      2 * time.Second,
+			Guard:        guard,
+		})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.ErrorIs(t, err, security.ErrTargetDenied)
+		assert.False(t, dialed.Load(), "denied CustomServer must not be dialed")
+	})
+
+	t.Run("denies metadata CustomServer without dialing", func(t *testing.T) {
+		guard, err := security.NewTargetGuard(nil, nil)
+		require.NoError(t, err)
+
+		res, err := Execute(context.Background(), WhoisQueryParams{Domain: "8.8.8.8"}, &Config{
+			CustomServer: "169.254.169.254:43",
+			Timeout:      2 * time.Second,
+			Guard:        guard,
+		})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.ErrorIs(t, err, security.ErrTargetDenied)
 	})
 }

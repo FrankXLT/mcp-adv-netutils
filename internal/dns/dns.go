@@ -204,29 +204,30 @@ func executeRemoteWithServers(ctx context.Context, params DNSQueryParams, config
 		guard = config.Guard
 	}
 
-	dohServer := primaryDefault
+	var dnsResponse *dns.Msg
 	if remoteAddr != "" {
-		dohServer = remoteAddr
-	}
-	if guard != nil {
-		if valErr := validateDoHServerURL(ctx, guard, dohServer); valErr != nil {
-			return nil, valErr
-		}
-	}
-
-	primaryCtx, primaryCancel := context.WithTimeout(ctx, timeout)
-	dnsResponse, err := queryDoHServer(primaryCtx, defaultDoHClient, dohServer, m)
-	primaryCancel()
-
-	if err != nil && remoteAddr == "" && ctx.Err() == nil && fallbackDefault != "" {
 		if guard != nil {
-			if valErr := validateDoHServerURL(ctx, guard, fallbackDefault); valErr != nil {
-				return nil, fmt.Errorf("primary DoH failed (%w); fallback rejected: %w", err, valErr)
+			if valErr := validateDoHServerURL(ctx, guard, remoteAddr); valErr != nil {
+				return nil, valErr
 			}
 		}
-		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, timeout)
-		dnsResponse, err = queryDoHServer(fallbackCtx, defaultDoHClient, fallbackDefault, m)
-		fallbackCancel()
+		dnsResponse, err = queryDoHWithTimeout(ctx, timeout, remoteAddr, m)
+	} else {
+		if guard != nil {
+			err = validateDoHServerURL(ctx, guard, primaryDefault)
+		}
+		if err == nil {
+			dnsResponse, err = queryDoHWithTimeout(ctx, timeout, primaryDefault, m)
+		}
+
+		if err != nil && ctx.Err() == nil && fallbackDefault != "" {
+			if guard != nil {
+				if valErr := validateDoHServerURL(ctx, guard, fallbackDefault); valErr != nil {
+					return nil, fmt.Errorf("primary DoH failed (%w); fallback rejected: %w", err, valErr)
+				}
+			}
+			dnsResponse, err = queryDoHWithTimeout(ctx, timeout, fallbackDefault, m)
+		}
 	}
 
 	if err != nil {
@@ -236,6 +237,12 @@ func executeRemoteWithServers(ctx context.Context, params DNSQueryParams, config
 		return nil, errors.New("no response from DoH server")
 	}
 	return createDNSResponse(dnsResponse), nil
+}
+
+func queryDoHWithTimeout(ctx context.Context, timeout time.Duration, serverURL string, msg *dns.Msg) (*dns.Msg, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return queryDoHServer(queryCtx, defaultDoHClient, serverURL, msg)
 }
 
 func queryDoHServer(ctx context.Context, client *http.Client, serverURL string, msg *dns.Msg) (*dns.Msg, error) {

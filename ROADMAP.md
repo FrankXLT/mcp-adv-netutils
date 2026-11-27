@@ -1,8 +1,8 @@
 # Roadmap (`mcp-adv-netutils`)
 
-## v2.0.0 — Shipped Capabilities
+## v2.0.0 – v2.0.1 — Shipped Capabilities
 
-`mcp-adv-netutils` v2.0.0 establishes a complete Layer 1–Layer 7 diagnostic, inventory, and continuous monitoring MCP platform across **33 registered MCP tools**:
+`mcp-adv-netutils` v2.0.0 establishes a complete Layer 1–Layer 7 diagnostic, inventory, and continuous monitoring MCP platform across **33 registered MCP tools**, with **v2.0.1** delivering Operator Studio (`/web`) polish, terminology alignment, and reliability improvements:
 
 - **Core L2–L7 Primitives**:
   - Embedded IEEE OUI hardware vendor resolution (`39,800+` OUIs via `//go:embed`) with UAA physical vs. LAA (`02:42:...` Docker/VM) classification.

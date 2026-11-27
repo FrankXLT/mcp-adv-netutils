@@ -1,4 +1,4 @@
-# Advanced Network Utilities (`mcp-adv-netutils`) v2.0.0
+# Advanced Network Utilities (`mcp-adv-netutils`) v2.0.1
 
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Ffrankxlt%2Fmcp--adv--netutils-blue?logo=docker)](https://github.com/FrankXLT/mcp-adv-netutils/pkgs/container/mcp-adv-netutils)
 [![Project Showcase](https://img.shields.io/badge/OAW%20Projects-Overview%20%7C%20Demo%20%7C%20Docs-2563eb)](https://projects.oaworkbench.org/mcp-adv-netutils/)
@@ -10,8 +10,9 @@
 
 ---
 
-## What's New in v2.0.0
+## What's New in v2.0.1
 
+- **v2.0.1 Operator Studio Polish & Reliability**: Refines Operator Studio (`/web`) responsiveness, visual contrast/layout polish, and runtime reliability across probes, cron monitoring, and static `?demo=1` showcase previews.
 - **Zero Node.js / Zero `supergateway` Runtime**: Ships as a single static `CGO_ENABLED=0` Go binary inside a single-layer Alpine container (`~41.5 MB` unpacked / `~11.4 MB` compressed, `USER netutils`, `setcap cap_net_raw+ep` via `RUN --mount=type=bind`), serving native `--stdio`, Streamable HTTP, backward-compatible `/sse`, `/web`, and `/healthz`.
 - **33 Registered MCP Tools**: Combines 12 hardened core tools, 6 active L2–L7 probes, 8 coordinated Diagnostic Recipes (`recipe_*`), `render_run_digest`, 4 Cron, Saved Destinations & Archive tools (adding `manage_saved_destinations`), and `unlock_netutils`/`lock_netutils`.
 - **Three-Tier ASCII Styles (`style`)**: Deterministic monospace cards across every tool and recipe—`default` (`72` columns exact), `quick` (`<= 40` columns borderless for `390px` mobile), `rich` (`76` columns boxed TUI), and `json` (`< 18.5 KB` wire cap with `FAIL`/`WARN` sorted first).
@@ -24,11 +25,11 @@
 
 ## MCP Tool Suite
 
-`mcp-adv-netutils` v2.0.0 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
+`mcp-adv-netutils` v2.0.1 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
 
 ### 1. Hardened Core Tools (12)
 
-| Tool | Layer | Capabilities & v2.0.0 Hardening |
+| Tool | Layer | Capabilities & v2.0.1 Hardening |
 | :--- | :--- | :--- |
 | **`mac_vendor_lookup`** | L2 | Embedded `39,800+` IEEE OUI lookup; separates physical `[UAA]` from Docker/VM `[LAA]` (`02:42:...`) |
 | **`ping`** | L3 | Per-call Echo ID/sequence isolation, IPv4/IPv6 TTL control messages, explicit `probe_mode` (`icmp` vs `tcp_fallback`) |
@@ -82,7 +83,7 @@ Every tool, Diagnostic Recipe, and cron summary supports a `style` parameter des
 
 Scheduled jobs in [`watchlist.yaml`](watchlist.yaml) and monitored Saved Destinations (`dest_<id>`) run automatically in-process via `robfig/cron/v3` (`SkipIfStillRunning`) or as a one-shot external timer (`--run-watchlist-once`):
 
-- **Default Watchlist Cadence**: `*/5m` canary `recipe_diff_ping`, `*/15m` `mtu_path_probe`, `*/6h` `recipe_diff_dns` and `recipe_diff_http`, plus nightly `tls_certificate_check` and `recipe_diff_snapshot`.
+- **Default Watchlist Cadence**: `*/5m` public DNS `recipe_diff_ping`, `*/15m` `mtu_path_probe`, `*/6h` `recipe_diff_dns` and `recipe_diff_http`, plus nightly `tls_certificate_check` and `recipe_diff_snapshot`.
 - **Saved Destinations (`manage_saved_destinations`)**: Stores friendly targets (category, optional Wake MAC, default check, pinned toggle, and 5-minute monitor toggle) in SQLite (`saved_destinations`), validates targets via `TargetGuard`, supports `list` | `save` | `delete` | `run`, and syncs `dest_<id>` checks with the cron watchlist.
 - **Two-Tick Alert Hysteresis**: Alerts flip only after **`>= 2` consecutive non-OK ticks**, preventing single-packet jitter from triggering false alarms.
 - **30-Day WAL SQLite Archive (`netutils_jobs.db`)**: Pure-Go `modernc.org/sqlite` (`?mode=ro` readers) retains every manual, MCP, and incident report for `30d` (`get_job_report`), down-ages healthy `*/5m` ticks across `7d -> 30d`, and runs an hourly TTL reaper with `PRAGMA incremental_vacuum` bounded by `--max-store-mb 256`.

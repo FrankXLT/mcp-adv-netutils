@@ -203,7 +203,7 @@ func validateAndResolveTarget(
 			return "", "", fmt.Errorf("target validation failed: %w", valErr)
 		}
 		if len(ips) > 0 {
-			return target, ips[0].String(), nil
+			return target, selectPreferredIP(ips).String(), nil
 		}
 		return target, "", nil
 	}
@@ -220,15 +220,29 @@ func validateAndResolveTarget(
 	}
 
 	if ips, lookupErr := lookupIPAddr(ctx, target); lookupErr == nil && len(ips) > 0 {
+		resolvedIPs := make([]net.IP, 0, len(ips))
 		for _, ipAddr := range ips {
 			if valErr := (*security.TargetGuard)(nil).ValidateIP(ipAddr.IP); valErr != nil {
 				return "", "", fmt.Errorf("resolved IP for %q blocked: %w", target, valErr)
 			}
+			resolvedIPs = append(resolvedIPs, ipAddr.IP)
 		}
-		return target, ips[0].IP.String(), nil
+		return target, selectPreferredIP(resolvedIPs).String(), nil
 	}
 
 	return target, "", nil
+}
+
+func selectPreferredIP(ips []net.IP) net.IP {
+	if len(ips) == 0 {
+		return nil
+	}
+	for _, candidate := range ips {
+		if candidate.To4() != nil {
+			return candidate
+		}
+	}
+	return ips[0]
 }
 
 func isAlternateOrUnvalidatedIPTarget(target string) bool {

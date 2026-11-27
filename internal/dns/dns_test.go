@@ -339,6 +339,61 @@ func TestExecuteRemoteDoHFallbackFreshTimeoutAndGuard(t *testing.T) {
 	assert.ErrorIs(t, err, security.ErrTargetDenied)
 }
 
+func TestExecuteRemoteDoHPrimaryValidationFallback(t *testing.T) {
+	t.Parallel()
+
+	makeReply := func(ip string) func(*dns.Msg) *dns.Msg {
+		return func(r *dns.Msg) *dns.Msg {
+			m := new(dns.Msg)
+			m.SetReply(r)
+			m.Answer = append(m.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP(ip),
+			})
+			return m
+		}
+	}
+
+	fastFallback := startMockDoHServer(t, makeReply("198.51.100.3"), 0)
+	guard, err := security.NewTargetGuard([]string{"127.0.0.1/32", "::1/128"}, nil)
+	require.NoError(t, err)
+
+	// Default primary fails TargetGuard validation, so it falls back to fastFallback.URL.
+	res, err := executeRemoteWithServers(context.Background(), DNSQueryParams{
+		Domain:     "fallback-guard.example.org",
+		RecordType: "A",
+	}, &QueryConfig{
+		Timeout: time.Second,
+		Guard:   guard,
+	}, "http://169.254.169.254/dns-query", fastFallback.URL)
+	require.NoError(t, err)
+	require.Len(t, res.Answer, 1)
+	assert.Equal(t, "198.51.100.3", res.Answer[0].Data)
+
+	// Explicit RemoteServerAddress failing TargetGuard must still fail closed without fallback.
+	_, err = executeRemoteWithServers(context.Background(), DNSQueryParams{
+		Domain:     "explicit-guard.example.org",
+		RecordType: "A",
+	}, &QueryConfig{
+		Timeout:             time.Second,
+		RemoteServerAddress: "http://169.254.169.254/dns-query",
+		Guard:               guard,
+	}, "http://169.254.169.254/dns-query", fastFallback.URL)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, security.ErrTargetDenied)
+
+	// Both primary and fallback rejected by TargetGuard returns combined error.
+	_, err = executeRemoteWithServers(context.Background(), DNSQueryParams{
+		Domain:     "both-denied.example.org",
+		RecordType: "A",
+	}, &QueryConfig{
+		Timeout: time.Second,
+		Guard:   guard,
+	}, "http://169.254.169.254/dns-query", "http://169.254.169.254/dns-query")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, security.ErrTargetDenied)
+}
+
 func TestCreateDNSResponseShortRRBoundsSafety(t *testing.T) {
 	t.Parallel()
 

@@ -13,6 +13,7 @@
   <script defer src="./vendor/quiet-evidence-bundle.js"></script>
   <script defer src="./charts.js"></script>
   <script defer src="./studio_destinations.js"></script>
+  <script defer src="./studio_tool_views.js"></script>
   <script defer src="./studio_results.js"></script>
   <script defer src="./studio.js"></script>
 </head>
@@ -23,7 +24,7 @@
       <span class="brand-title">Network Studio</span>
       <span id="deadboltPill" class="va-pill deadbolt-pill" data-variant="status" data-state="fault">LOCKED</span>
     </div>
-    <nav class="topbar-tabs-nav" aria-label="Studio Sections">
+    <nav class="topbar-tabs-nav" aria-label="Studio Sections" hidden>
       <div id="studioTabs" class="va-tab-strip va-tabs" role="tablist" aria-label="Workspace Views">
         <button id="tabBtnChecks" class="va-tab" type="button" role="tab" aria-selected="true" data-tab="checks" tabindex="0">Checks</button>
         <button id="tabBtnLan" class="va-tab" type="button" role="tab" aria-selected="false" data-tab="lan" tabindex="-1">Local Network</button>
@@ -115,6 +116,7 @@
             <div id="pinnedList" class="pinned-pills-wrap" role="group" aria-label="Pinned Destinations"></div>
           </div>
           <div class="pinned-bar-actions">
+            <button id="pinnedManageBtn" class="va-btn va-btn-ghost va-btn-sm pinned-manage-mobile" type="button">Manage</button>
             <button id="topAddDestBtn" class="va-btn va-btn-secondary va-btn-sm" type="button">+ Add Destination</button>
             <button id="scanPinnedBtn" class="va-btn va-btn-primary va-btn-sm" type="button" aria-busy="false">Scan Pinned</button>
           </div>
@@ -142,7 +144,7 @@
               </div>
               <div class="va-field">
                 <label for="targetInput" class="va-label">Destination Host, IP, or URL</label>
-                <input id="targetInput" name="target" class="va-input" type="text" placeholder="canary.example.net" autocomplete="off" spellcheck="false" required aria-describedby="targetHint targetError" aria-invalid="false" data-error="targetError">
+                <input id="targetInput" name="target" class="va-input" type="text" placeholder="1.1.1.1" autocomplete="off" spellcheck="false" required aria-describedby="targetHint targetError" aria-invalid="false" data-error="targetError">
                 <span id="targetHint" class="va-field-hint">Compare latency from local adapter, gateway, ISP, and destination.</span>
                 <span id="targetError" class="va-field-error" role="alert" aria-live="polite"></span>
               </div>
@@ -219,6 +221,11 @@
                 <div id="runDnsHost" class="echart-host echart-host-sm" role="img" aria-label="DNS resolver latency comparison chart"></div>
                 <div id="runDnsTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="DNS Consensus Table" tabindex="0"></div>
               </div>
+              <div id="runToolChartWrap" class="chart-panel" hidden>
+                <h3 id="runToolChartTitle" class="chart-title">Check Details</h3>
+                <div id="runToolChartHost" class="echart-host echart-host-sm" role="img" aria-label="Check breakdown chart"></div>
+                <div id="runToolTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="Check Details Table" tabindex="0"></div>
+              </div>
               <div id="runSummaryVisual" class="chart-panel">
                 <p id="runVisualEmptyText" class="chart-empty">Run any check to view interactive latency whiskers, timing waterfalls, or DNS comparisons.</p>
                 <dl id="runFactsGrid" class="facts-grid" hidden></dl>
@@ -233,24 +240,6 @@
           <script type="application/json" id="runExportPayload" class="qe-export-payload">{"markdown":"","tsv":""}</script>
         </article>
       </div>
-
-      <section id="savedDestinationsSection" class="va-card destinations-section" tabindex="-1" aria-labelledby="savedDestTitle">
-        <div class="card-header-row">
-          <div><h2 id="savedDestTitle" class="card-title">Saved Destinations</h2><span id="savedDestCount" class="card-meta tabular-nums">0 destinations</span></div>
-          <button id="addDestinationBtn" class="va-btn va-btn-primary va-btn-sm" type="button">+ Add Destination</button>
-        </div>
-        <div id="savedDestEmpty" class="va-empty-state" data-kind="empty" hidden>
-          <p class="empty-state-title">No saved destinations yet.</p>
-          <p class="va-field-hint">Save frequent targets to pin 1-click checks and schedule automatic 5-minute monitoring.</p>
-          <button id="emptyAddDestBtn" class="va-btn va-btn-secondary va-btn-sm" type="button">Add First Destination</button>
-        </div>
-        <div id="savedDestTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="Saved Destinations" tabindex="0">
-          <table id="savedDestTable" class="va-data-table">
-            <thead><tr><th>Destination</th><th>Default Check</th><th>Pinned</th><th>5-Min Monitor</th><th>Actions</th></tr></thead>
-            <tbody id="savedDestBody"></tbody>
-          </table>
-        </div>
-      </section>
     </section>
 
     <section id="panelLan" class="studio-panel" role="tabpanel" aria-labelledby="tabBtnLan" hidden="until-found">
@@ -329,12 +318,13 @@
       <div id="historyWarmupBanner" class="va-banner warmup-banner" role="status" hidden>
         <div class="banner-body">
           <svg class="banner-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15.5 14"></polyline></svg>
-          <span id="historyWarmupText">Warming up — 0 checks collected</span>
+          <span id="historyWarmupText">0 check runs saved — enable 5-minute monitoring on any destination for continuous uptime tracking.</span>
         </div>
       </div>
       <div class="va-card history-timeline-card">
         <div class="card-header-row"><h2 class="card-title">Response Time &amp; Health Timeline</h2><span id="historySampleMeta" class="card-meta tabular-nums">0 checks</span></div>
         <div id="historyTimelineHost" class="echart-host echart-host-tall" role="img" aria-label="Scheduled response time and health timeline"></div>
+        <p id="historyScaleNote" class="va-field-hint history-scale-note" hidden></p>
       </div>
       <div id="cronHealthCard" class="va-card cron-health-card" tabindex="-1">
         <div class="card-header-row"><h2 class="card-title">Scheduled Checks &amp; Destination Uptime</h2><span class="card-meta">5-minute automated monitoring</span></div>
@@ -367,7 +357,7 @@
     </section>
   </main>
 
-  <nav id="mobileNavDock" class="va-nav-dock va-shell-bottomdock" aria-label="Mobile Navigation">
+  <nav id="mobileNavDock" class="va-nav-dock va-shell-bottomdock" aria-label="Mobile Navigation" hidden>
     <button class="va-dock-btn" type="button" data-tab="checks" aria-pressed="true"><svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>Checks</span></button>
     <button class="va-dock-btn" type="button" data-tab="lan" aria-pressed="false"><svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M17 3h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M10 15h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z M5 9v3h14V9 M12 12v3"></path></svg><span>Local Network</span></button>
     <button class="va-dock-btn" type="button" data-tab="history" aria-pressed="false"><svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 15"></polyline></svg><span>History</span></button>
@@ -415,32 +405,54 @@
     </div>
   </dialog>
 
-  <dialog id="destDialog" class="va-modal-sheet dest-dialog" closedby="any" aria-labelledby="destDialogTitle">
+  <dialog id="savedDestsDialog" class="va-modal-sheet saved-dests-dialog" closedby="any" aria-labelledby="savedDestsDialogTitle">
     <div class="va-modal-sheet-hdr modal-header">
-      <h1 id="destDialogTitle" class="modal-title">Save Destination</h1>
-      <button id="destDialogCloseBtn" class="va-btn va-btn-ghost va-btn-sm" type="button" aria-label="Close destination dialog">Close</button>
+      <div class="modal-hdr-title-group">
+        <h1 id="savedDestsDialogTitle" class="modal-title">Saved Destinations</h1>
+        <span id="savedDestCount" class="card-meta tabular-nums">0 destinations</span>
+      </div>
+      <div class="modal-hdr-actions">
+        <button id="addDestinationBtn" class="va-btn va-btn-primary va-btn-sm" type="button">+ Add Destination</button>
+        <button id="savedDestsCloseBtn" class="va-btn va-btn-ghost va-btn-sm" type="button" autofocus aria-label="Close saved destinations manager">Close</button>
+      </div>
     </div>
-    <form id="destForm" class="va-modal-sheet-body modal-body dest-form" novalidate>
-      <input id="destIdInput" type="hidden" value="">
-      <div class="va-form-grid">
-        <div class="va-field"><label for="destNameInput" class="va-label">Display Name</label><input id="destNameInput" class="va-input" type="text" placeholder="Core Gateway" required autofocus aria-describedby="destNameError" aria-invalid="false" data-error="destNameError"><span id="destNameError" class="va-field-error" role="alert" aria-live="polite"></span></div>
-        <div class="va-field"><label for="destTargetInput" class="va-label">Target Host, IP, or URL</label><input id="destTargetInput" class="va-input" type="text" placeholder="192.0.2.1" required aria-describedby="destTargetError" aria-invalid="false" data-error="destTargetError"><span id="destTargetError" class="va-field-error" role="alert" aria-live="polite"></span></div>
-        <div class="va-field">
-          <label for="destCategorySelect" class="va-label">Category</label>
-          <select id="destCategorySelect" class="va-select"><option value="Core">Core</option><option value="Website &amp; API">Website &amp; API</option><option value="LAN">LAN</option><option value="Servers &amp; NAS">Servers &amp; NAS</option><option value="Containers">Containers</option><option value="Remote">Remote</option></select>
-        </div>
-        <div class="va-field"><label for="destMacInput" class="va-label">Wake MAC Address (Optional)</label><input id="destMacInput" class="va-input" type="text" placeholder="00:00:5E:00:53:42" aria-describedby="destMacError" aria-invalid="false" data-error="destMacError"><span id="destMacError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+    <div class="va-modal-sheet-body modal-body">
+      <section id="destEditorPanel" class="dest-editor-panel" hidden aria-labelledby="destDialogTitle">
+        <div class="card-header-row"><h2 id="destDialogTitle" class="chart-title">Save Destination</h2></div>
+        <form id="destForm" class="dest-form" novalidate>
+          <input id="destIdInput" type="hidden" value="">
+          <div class="va-form-grid">
+            <div class="va-field"><label for="destNameInput" class="va-label">Display Name</label><input id="destNameInput" class="va-input" type="text" placeholder="Core Gateway" required aria-describedby="destNameError" aria-invalid="false" data-error="destNameError"><span id="destNameError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+            <div class="va-field"><label for="destTargetInput" class="va-label">Target Host, IP, or URL</label><input id="destTargetInput" class="va-input" type="text" placeholder="192.0.2.1" required aria-describedby="destTargetError" aria-invalid="false" data-error="destTargetError"><span id="destTargetError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+            <div class="va-field">
+              <label for="destCategorySelect" class="va-label">Category</label>
+              <select id="destCategorySelect" class="va-select"><option value="Core">Core</option><option value="Website &amp; API">Website &amp; API</option><option value="LAN">LAN</option><option value="Servers &amp; NAS">Servers &amp; NAS</option><option value="Containers">Containers</option><option value="Remote">Remote</option></select>
+            </div>
+            <div class="va-field"><label for="destMacInput" class="va-label">Wake MAC Address (Optional)</label><input id="destMacInput" class="va-input" type="text" placeholder="00:00:5E:00:53:42" aria-describedby="destMacError" aria-invalid="false" data-error="destMacError"><span id="destMacError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+          </div>
+          <div class="va-field"><label for="destCheckSelect" class="va-label">Default Check</label><select id="destCheckSelect" class="va-select"></select></div>
+          <div class="dest-toggles">
+            <label class="checkbox-row"><input id="destPinnedCheck" type="checkbox"> <span>Pin to top bar for 1-click checks</span></label>
+            <label class="checkbox-row"><input id="destMonitorCheck" type="checkbox"> <span>Monitor automatically every 5 minutes</span></label>
+          </div>
+          <div class="modal-footer dest-modal-footer">
+            <button id="destCancelBtn" class="va-btn va-btn-ghost" type="button">Cancel</button>
+            <button id="destSaveBtn" class="va-btn va-btn-primary" type="submit" aria-busy="false">Save Destination</button>
+          </div>
+        </form>
+      </section>
+      <div id="savedDestEmpty" class="va-empty-state" data-kind="empty" hidden>
+        <p class="empty-state-title">No saved destinations yet.</p>
+        <p class="va-field-hint">Save frequent targets to pin 1-click checks and schedule automatic 5-minute monitoring.</p>
+        <button id="emptyAddDestBtn" class="va-btn va-btn-secondary va-btn-sm" type="button">Add First Destination</button>
       </div>
-      <div class="va-field"><label for="destCheckSelect" class="va-label">Default Check</label><select id="destCheckSelect" class="va-select"></select></div>
-      <div class="dest-toggles">
-        <label class="checkbox-row"><input id="destPinnedCheck" type="checkbox"> <span>Pin to top bar for 1-click checks</span></label>
-        <label class="checkbox-row"><input id="destMonitorCheck" type="checkbox"> <span>Monitor automatically every 5 minutes</span></label>
+      <div id="savedDestTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="Saved Destinations" tabindex="0">
+        <table id="savedDestTable" class="va-data-table">
+          <thead><tr><th>Destination</th><th>Default Check</th><th>Pinned</th><th>5-Min Monitor</th><th>Actions</th></tr></thead>
+          <tbody id="savedDestBody"></tbody>
+        </table>
       </div>
-      <div class="modal-footer dest-modal-footer">
-        <button id="destCancelBtn" class="va-btn va-btn-ghost" type="button">Cancel</button>
-        <button id="destSaveBtn" class="va-btn va-btn-primary" type="submit" aria-busy="false">Save Destination</button>
-      </div>
-    </form>
+    </div>
   </dialog>
 
   <div id="a11yAnnouncer" class="va-sr-only visually-hidden" aria-live="polite" aria-atomic="true"></div>

@@ -89,6 +89,11 @@ type DiffHTTPEndpoint struct {
 	TotalMs     float64 `json:"total_ms"`
 	ChainValid  *bool   `json:"chain_valid,omitempty"`
 	ExpiresDays *int    `json:"expires_in_days,omitempty"`
+	Subject     string  `json:"subject,omitempty"`
+	Issuer      string  `json:"issuer,omitempty"`
+	TLSVersion  string  `json:"tls_version,omitempty"`
+	CipherSuite string  `json:"cipher_suite,omitempty"`
+	NotAfter    string  `json:"not_after,omitempty"`
 	Status      string  `json:"status"`
 	Detail      string  `json:"detail,omitempty"`
 }
@@ -257,7 +262,7 @@ func ExecuteDiffHTTP(ctx context.Context, deps Dependencies, params DiffHTTPPara
 		spark, health, statuses = append(spark, ep.TotalMs), append(health, ep.Status), append(statuses, ep.Status)
 	}
 	overall := worstStatus(statuses...)
-	summary := fmt.Sprintf("Compared %d HTTP/TLS endpoint(s): overall %s", len(endpoints), overall)
+	summary := formatDiffHTTPSummary(endpoints, overall)
 	return makeRecipeResult(&cardSpec{
 		ToolName: "diff_http", Title: "DIFF HTTP / TLS", Subtitle: "Phase Timing & Certs", Target: urls[0],
 		Status: overall, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
@@ -265,6 +270,27 @@ func ExecuteDiffHTTP(ctx context.Context, deps Dependencies, params DiffHTTPPara
 		Headers: []string{"URL", "Code", "DNS", "TCP", "TLS", "TTFB", "Total", "Cert"}, Rows: rows,
 		SparkValues: spark, HealthStates: health, RawData: DiffHTTPData{Endpoints: endpoints},
 	}), nil
+}
+
+func formatDiffHTTPSummary(endpoints []DiffHTTPEndpoint, overall string) string {
+	proto := "HTTP"
+	for i := range endpoints {
+		if strings.HasPrefix(strings.ToLower(endpoints[i].URL), "https://") || endpoints[i].ChainValid != nil {
+			proto = "HTTPS"
+			break
+		}
+	}
+	phrase := "failed"
+	switch overall {
+	case StatusOK:
+		phrase = "healthy"
+	case StatusWARN:
+		phrase = "needs attention"
+	}
+	if len(endpoints) == 1 {
+		return fmt.Sprintf("Checked 1 %s endpoint — %s", proto, phrase)
+	}
+	return fmt.Sprintf("Compared %d %s endpoints — %s", len(endpoints), proto, phrase)
 }
 
 // ExecuteDiffSnapshot compares the current ARP sweep against a stored baseline snapshot,
@@ -333,14 +359,14 @@ func ExecuteDiffSnapshot(ctx context.Context, deps Dependencies, params DiffSnap
 }
 
 func buildDiffPingSpecs(gw, wgPeer, canary, target string) []pingHopSpec {
-	specs := []pingHopSpec{{stage: "[1] NIC/Loopback", address: "127.0.0.1"}}
+	specs := []pingHopSpec{{stage: "[1] Local Adapter", address: "127.0.0.1"}}
 	for _, item := range []pingHopSpec{{stage: "[2] Gateway", address: gw}, {stage: "[3] WG/WAN Peer", address: wgPeer}} {
 		if addr := strings.TrimSpace(item.address); addr != "" {
 			specs = append(specs, pingHopSpec{stage: item.stage, address: addr})
 		}
 	}
 	if canary != "" && canary != target {
-		specs = append(specs, pingHopSpec{stage: "[4] Canary", address: canary})
+		specs = append(specs, pingHopSpec{stage: "[4] Public DNS", address: canary})
 	}
 	return append(specs, pingHopSpec{stage: "[5] Target", address: target})
 }
@@ -370,14 +396,14 @@ func diagnoseDiffPing(hops []DiffPingHop, tcpChecks []DiffPingTCPCheck) (string,
 		}
 		switch hops[i].Stage[:3] {
 		case "[1]":
-			return "Local NIC/loopback stack failure", StatusFAIL
+			return "Local adapter/loopback stack failure", StatusFAIL
 		case "[2]":
 			return "L2/Gateway unreachable (check local ARP and link)", StatusFAIL
 		case "[3]":
 			return "WireGuard/WAN peer unreachable", StatusFAIL
 		case "[4]":
 			if targetHop.Status == StatusFAIL {
-				return "Upstream WAN/canary and target both unreachable", StatusFAIL
+				return "Upstream reference host and target both unreachable", StatusFAIL
 			}
 		}
 	}
@@ -479,10 +505,18 @@ func probeDiffHTTPEndpoint(ctx context.Context, rawURL, method string, count int
 	}
 	valid := tlsRes.ChainValid
 	ep.ChainValid = &valid
+	ep.TLSVersion = tlsRes.TLSVersion
+	ep.CipherSuite = tlsRes.CipherSuite
 	if len(tlsRes.PeerCertificates) > 0 {
-		days := tlsRes.PeerCertificates[0].ExpiresInDays
+		cert := tlsRes.PeerCertificates[0]
+		days := cert.ExpiresInDays
 		ep.ExpiresDays = &days
-		if tlsRes.PeerCertificates[0].IsExpired {
+		ep.Subject = cert.Subject
+		ep.Issuer = cert.Issuer
+		if !cert.NotAfter.IsZero() {
+			ep.NotAfter = cert.NotAfter.UTC().Format(time.RFC3339)
+		}
+		if cert.IsExpired {
 			ep.Status = StatusFAIL
 		} else if !valid || days <= 30 {
 			ep.Status = worstStatus(ep.Status, StatusWARN)

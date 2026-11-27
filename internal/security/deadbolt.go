@@ -32,6 +32,7 @@ type DeadboltStatus struct {
 	LockedOut              bool      `json:"locked_out"`
 	LockedUntil            time.Time `json:"locked_until,omitempty"`
 	AllowLockedCronSummary bool      `json:"allow_locked_cron_summary"`
+	UnlockEpoch            uint64    `json:"-"`
 }
 
 // Deadbolt manages a thread-safe passphrase-gated unlock window with
@@ -257,6 +258,7 @@ func (d *Deadbolt) Status() DeadboltStatus {
 		TTLSeconds:             int64(ttl.Seconds()),
 		FailedAttempts:         d.failedAttempts,
 		AllowLockedCronSummary: d.allowLockedCronSummary,
+		UnlockEpoch:            d.unlockEpoch,
 	}
 	if enabled && !d.unlockedAt.IsZero() && now.Sub(d.unlockedAt) < ttl {
 		expiresAt := d.unlockedAt.Add(ttl)

@@ -34,6 +34,7 @@ type Config struct {
 	Scheduler              *cronmon.Scheduler
 	Deadbolt               *security.Deadbolt
 	AllowLockedCronSummary bool
+	SessionKey             []byte
 }
 
 type studioHandler struct {
@@ -58,15 +59,16 @@ type statusPayload struct {
 }
 
 const (
-	passphraseHeader  = "X-Netutils-Passphrase"
-	sessionCookieName = "netutils_session"
-	sessionKeyBytes   = 32
-	defaultCronPeriod = "30d"
-	defaultJobsLimit  = 50
-	maxJobsLimit      = 500
-	maxUnlockBodySize = 4 << 10
-	maxRunBodySize    = 64 << 10
-	bytesPerMiB       = 1024 * 1024
+	passphraseHeader        = "X-Netutils-Passphrase"
+	sessionCookieName       = "netutils_session"
+	sessionKeyBytes         = 32
+	sessionRefreshThreshold = 30
+	defaultCronPeriod       = "30d"
+	defaultJobsLimit        = 50
+	maxJobsLimit            = 500
+	maxUnlockBodySize       = 4 << 10
+	maxRunBodySize          = 64 << 10
+	bytesPerMiB             = 1024 * 1024
 )
 
 //go:embed all:assets
@@ -79,9 +81,14 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open embedded webui assets: %w", err)
 	}
-	sessionKey := make([]byte, sessionKeyBytes)
-	if _, err := rand.Read(sessionKey); err != nil {
-		return nil, fmt.Errorf("init webui session key: %w", err)
+	sessionKey := append([]byte(nil), cfg.SessionKey...)
+	if len(sessionKey) == 0 {
+		sessionKey = make([]byte, sessionKeyBytes)
+		if _, err := rand.Read(sessionKey); err != nil {
+			return nil, fmt.Errorf("init webui session key: %w", err)
+		}
+	} else if len(sessionKey) < sessionKeyBytes || isAllZeroKey(sessionKey) {
+		return nil, fmt.Errorf("invalid webui session key: must be at least %d non-zero bytes", sessionKeyBytes)
 	}
 	ver := strings.TrimSpace(cfg.Version)
 	if ver == "" {
@@ -101,6 +108,14 @@ func NewHandler(cfg Config) (http.Handler, error) {
 		assets:                 sub,
 		sessionKey:             sessionKey,
 	}, nil
+}
+
+func isAllZeroKey(key []byte) bool {
+	var nonZero byte
+	for _, b := range key {
+		nonZero |= b
+	}
+	return nonZero == 0
 }
 
 func (h *studioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +212,10 @@ func (h *studioHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := h.deadbolt.Status()
-	authorized := h.isSessionAuthorized(w, r, st.Unlocked)
+	authorized, expUnix := h.isSessionAuthorized(w, r, st)
+	if authorized && !st.ExpiresAt.IsZero() && st.ExpiresAt.Unix() > expUnix+sessionRefreshThreshold {
+		h.setSessionCookieWithEpoch(w, r, st.ExpiresAt, st.UnlockEpoch)
+	}
 	resp := statusPayload{
 		Locked: !authorized, Enabled: true, DeadboltEnabled: true,
 		LockedOut: st.LockedOut, Version: h.version,
@@ -237,7 +255,14 @@ func (h *studioHandler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ok, exp := h.tryDeadboltUnlock(w, pass); ok {
-		h.setSessionCookie(w, r, exp)
+		st := h.deadbolt.Status()
+		if !st.Unlocked || st.UnlockEpoch == 0 {
+			writeJSON(w, http.StatusUnauthorized, statusPayload{
+				Locked: true, Enabled: true, DeadboltEnabled: true, Error: "session locked",
+			})
+			return
+		}
+		h.setSessionCookieWithEpoch(w, r, exp, st.UnlockEpoch)
 		writeJSON(w, http.StatusOK, statusPayload{
 			Enabled: true, DeadboltEnabled: true, ExpiresAt: exp.UTC().Format(time.RFC3339), Version: h.version,
 		})
@@ -277,7 +302,24 @@ func (h *studioHandler) isUnlocked(w http.ResponseWriter, r *http.Request) bool 
 	if h.deadbolt == nil || !h.deadbolt.IsEnabled() {
 		return true
 	}
-	return h.isSessionAuthorized(w, r, h.deadbolt.IsUnlocked())
+	st := h.deadbolt.Status()
+	authorized, expUnix := h.isSessionAuthorized(w, r, st)
+	if !authorized {
+		return false
+	}
+	if !h.deadbolt.IsUnlocked() {
+		h.clearSessionCookie(w, r)
+		return false
+	}
+	stAfter := h.deadbolt.Status()
+	if !stAfter.Unlocked || stAfter.UnlockEpoch != st.UnlockEpoch {
+		h.clearSessionCookie(w, r)
+		return false
+	}
+	if !stAfter.ExpiresAt.IsZero() && stAfter.ExpiresAt.Unix() > expUnix+sessionRefreshThreshold {
+		h.setSessionCookieWithEpoch(w, r, stAfter.ExpiresAt, stAfter.UnlockEpoch)
+	}
+	return true
 }
 
 func (h *studioHandler) allowLockedSummary() bool {
@@ -295,50 +337,42 @@ func (h *studioHandler) requireUnlocked(w http.ResponseWriter, r *http.Request) 
 	return false
 }
 
-func (h *studioHandler) isSessionAuthorized(w http.ResponseWriter, r *http.Request, deadboltUnlocked bool) bool {
-	if !deadboltUnlocked {
+func (h *studioHandler) isSessionAuthorized(w http.ResponseWriter, r *http.Request, st security.DeadboltStatus) (bool, int64) {
+	if !st.Unlocked || st.UnlockEpoch == 0 {
 		if _, err := r.Cookie(sessionCookieName); err == nil {
 			h.clearSessionCookie(w, r)
 		}
-		return false
+		return false, 0
 	}
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return false
+		return false, 0
 	}
-	if !h.verifySessionCookie(c.Value, time.Now(), h.deadbolt.UnlockEpoch()) {
+	ok, expUnix := h.verifySessionCookie(c.Value, time.Now(), st.UnlockEpoch)
+	if !ok {
 		h.clearSessionCookie(w, r)
-		return false
+		return false, 0
 	}
-	return true
+	return true, expUnix
 }
 
-func (h *studioHandler) setSessionCookie(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
-	maxAge := int(time.Until(expiresAt).Round(time.Second).Seconds())
-	if maxAge < 1 {
-		maxAge = 1
-	}
-	// #nosec G124 -- HttpOnly and SameSiteStrictMode are enforced; Secure adapts to TLS/HTTPS so LAN HTTP works.
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    h.signSessionCookie(expiresAt, h.deadbolt.UnlockEpoch()),
-		Path:     "/",
-		MaxAge:   maxAge,
-		Expires:  expiresAt.UTC(),
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   isHTTPS(r),
-	})
+func (h *studioHandler) setSessionCookieWithEpoch(w http.ResponseWriter, r *http.Request, expiresAt time.Time, epoch uint64) {
+	maxAge := max(int(time.Until(expiresAt).Round(time.Second).Seconds()), 1)
+	writeSessionCookie(w, r, h.signSessionCookie(expiresAt, epoch), maxAge, expiresAt.UTC())
 }
 
 func (h *studioHandler) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	writeSessionCookie(w, r, "", -1, time.Unix(0, 0).UTC())
+}
+
+func writeSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int, expires time.Time) {
 	// #nosec G124 -- HttpOnly and SameSiteStrictMode are enforced; Secure adapts to TLS/HTTPS so LAN HTTP works.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    "",
+		Value:    value,
 		Path:     "/",
-		MaxAge:   -1,
-		Expires:  time.Unix(0, 0).UTC(),
+		MaxAge:   maxAge,
+		Expires:  expires,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		Secure:   isHTTPS(r),
@@ -352,33 +386,36 @@ func (h *studioHandler) signSessionCookie(expiresAt time.Time, epoch uint64) str
 	return payload + "." + hex.EncodeToString(mac.Sum(nil))
 }
 
-func (h *studioHandler) verifySessionCookie(raw string, now time.Time, expectedEpoch uint64) bool {
+func (h *studioHandler) verifySessionCookie(raw string, now time.Time, expectedEpoch uint64) (bool, int64) {
 	payload, sigHex, ok := strings.Cut(raw, ".")
 	if !ok || payload == "" || sigHex == "" {
-		return false
+		return false, 0
 	}
 	sig, err := hex.DecodeString(sigHex)
 	if err != nil || len(sig) != sha256.Size {
-		return false
+		return false, 0
 	}
 	mac := hmac.New(sha256.New, h.sessionKey)
 	_, _ = mac.Write([]byte(payload))
 	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return false
+		return false, 0
 	}
 	expStr, epochStr, ok := strings.Cut(payload, ":")
 	if !ok || expStr == "" || epochStr == "" {
-		return false
+		return false, 0
 	}
 	expUnix, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil || expUnix <= now.Unix() {
-		return false
+		return false, 0
 	}
 	epoch, err := strconv.ParseUint(epochStr, 10, 64)
 	if err != nil || epoch != expectedEpoch {
-		return false
+		return false, 0
 	}
-	return h.deadbolt == nil || epoch != 0
+	if h.deadbolt != nil && epoch == 0 {
+		return false, 0
+	}
+	return true, expUnix
 }
 
 func isHTTPS(r *http.Request) bool {
@@ -411,21 +448,15 @@ func readLimitedBody(w http.ResponseWriter, body io.ReadCloser, limit int64) ([]
 }
 
 func decodeLimitedJSON(w http.ResponseWriter, body io.ReadCloser, limit int64, dst any) (int, string) {
-	raw, status, msg := readLimitedBody(w, body, limit)
-	if status != 0 {
-		return status, msg
-	}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return http.StatusBadRequest, "request body must not be empty"
-	}
-	if err := json.Unmarshal(raw, dst); err != nil {
-		return http.StatusBadRequest, "invalid JSON payload"
-	}
-	return 0, ""
+	return decodeJSONBody(w, body, limit, dst, false)
 }
 
 func decodeOptionalJSON(w http.ResponseWriter, body io.ReadCloser, limit int64, dst any) (int, string) {
-	if body == nil {
+	return decodeJSONBody(w, body, limit, dst, true)
+}
+
+func decodeJSONBody(w http.ResponseWriter, body io.ReadCloser, limit int64, dst any, optional bool) (int, string) {
+	if optional && body == nil {
 		return 0, ""
 	}
 	raw, status, msg := readLimitedBody(w, body, limit)
@@ -433,7 +464,10 @@ func decodeOptionalJSON(w http.ResponseWriter, body io.ReadCloser, limit int64, 
 		return status, msg
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return 0, ""
+		if optional {
+			return 0, ""
+		}
+		return http.StatusBadRequest, "request body must not be empty"
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
 		return http.StatusBadRequest, "invalid JSON payload"

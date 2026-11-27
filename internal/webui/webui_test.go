@@ -3,9 +3,14 @@ package webui_test
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +33,11 @@ type studioDeps struct {
 }
 
 func newTestStudio(t *testing.T, passphrase string) studioDeps {
+	t.Helper()
+	return newTestStudioWithKey(t, passphrase, nil)
+}
+
+func newTestStudioWithKey(t *testing.T, passphrase string, sessionKey []byte) studioDeps {
 	t.Helper()
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:", 8)
@@ -81,6 +91,7 @@ func newTestStudio(t *testing.T, passphrase string) studioDeps {
 		Store:      st,
 		Scheduler:  sched,
 		Deadbolt:   db,
+		SessionKey: sessionKey,
 	})
 	require.NoError(t, err)
 
@@ -131,7 +142,7 @@ func TestStaticAssetsAndDemoSnapshot(t *testing.T) {
 	t.Parallel()
 	deps := newTestStudio(t, "")
 
-	for _, p := range []string{"/", "/index.html", "/tokens.css", "/studio.css", "/charts.js", "/studio.js", "/demo_snapshots/demo_snapshot.json"} {
+	for _, p := range []string{"/", "/index.html", "/tokens.css", "/studio.css", "/charts.js", "/studio_tool_views.js", "/studio_results.js", "/studio_destinations.js", "/studio.js", "/demo_snapshots/demo_snapshot.json"} {
 		rr := doReq(t, deps.handler, http.MethodGet, p, "")
 		assert.Equal(t, http.StatusOK, rr.Code, "path=%s", p)
 		assert.Equal(t, "nosniff", rr.Header().Get("X-Content-Type-Options"))
@@ -364,6 +375,117 @@ func TestSessionCookieEpochRotationRejectsPreLockReplay(t *testing.T) {
 	assert.Equal(t, true, decodeMap(t, stNoCookie)["locked"])
 }
 
+func signTestSessionCookie(key []byte, expiresAt time.Time, epoch uint64) *http.Cookie {
+	payload := fmt.Sprintf("%d:%d", expiresAt.Unix(), epoch)
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(payload))
+	return &http.Cookie{
+		Name:  "netutils_session",
+		Value: payload + "." + hex.EncodeToString(mac.Sum(nil)),
+	}
+}
+
+func parseTestSessionCookie(t *testing.T, raw string) (int64, uint64) {
+	t.Helper()
+	payload, _, ok := strings.Cut(raw, ".")
+	require.True(t, ok)
+	expStr, epochStr, ok := strings.Cut(payload, ":")
+	require.True(t, ok)
+	expUnix, err := strconv.ParseInt(expStr, 10, 64)
+	require.NoError(t, err)
+	epoch, err := strconv.ParseUint(epochStr, 10, 64)
+	require.NoError(t, err)
+	return expUnix, epoch
+}
+
+func TestSessionCookieSlidingRefreshFollowsDeadboltTTL(t *testing.T) {
+	t.Parallel()
+	for _, badKey := range [][]byte{bytes.Repeat([]byte{0x01}, 16), make([]byte, 32)} {
+		_, keyErr := webui.NewHandler(webui.Config{SessionKey: badKey})
+		require.Error(t, keyErr)
+		assert.Contains(t, keyErr.Error(), "session key")
+	}
+
+	sessionKey := bytes.Repeat([]byte{0x42}, 32)
+	deps := newTestStudioWithKey(t, "alpha bravo charlie", sessionKey)
+
+	unlockResp := doReq(t, deps.handler, http.MethodPost, "/api/unlock", `{"passphrase":"alpha bravo charlie"}`)
+	require.Equal(t, http.StatusOK, unlockResp.Code)
+	initialCookie := findCookie(t, unlockResp, "netutils_session")
+	require.NotNil(t, initialCookie)
+	epoch1 := deps.deadbolt.UnlockEpoch()
+	require.NotZero(t, epoch1)
+
+	stBefore := deps.deadbolt.Status()
+	require.True(t, stBefore.Unlocked)
+	require.False(t, stBefore.ExpiresAt.IsZero())
+
+	// Unauthenticated requests (no cookie or invalid cookie) must fail 401 without sliding Deadbolt TTL.
+	time.Sleep(1100 * time.Millisecond)
+	assert.Equal(t, http.StatusUnauthorized, doReq(t, deps.handler, http.MethodGet, "/api/jobs", "").Code)
+	assert.Equal(t, stBefore.ExpiresAt, deps.deadbolt.Status().ExpiresAt)
+	invalidCookie := &http.Cookie{Name: "netutils_session", Value: "tampered.deadbeef"}
+	assert.Equal(t, http.StatusUnauthorized, doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{invalidCookie}).Code)
+	assert.Equal(t, stBefore.ExpiresAt, deps.deadbolt.Status().ExpiresAt)
+
+	// Rapid follow-up within the +30s refresh threshold must not re-send Set-Cookie.
+	freshResp := doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{initialCookie})
+	require.Equal(t, http.StatusOK, freshResp.Code)
+	assert.Nil(t, findCookie(t, freshResp, "netutils_session"))
+
+	// A valid non-expired cookie >30s behind Deadbolt's sliding ExpiresAt must be refreshed.
+	staleExp := stBefore.ExpiresAt.Add(-2 * time.Minute)
+	staleCookie := signTestSessionCookie(sessionKey, staleExp, epoch1)
+
+	refreshResp := doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{staleCookie})
+	require.Equal(t, http.StatusOK, refreshResp.Code)
+	refreshed := findCookie(t, refreshResp, "netutils_session")
+	require.NotNil(t, refreshed)
+	assert.True(t, refreshed.HttpOnly)
+	assert.Equal(t, http.SameSiteStrictMode, refreshed.SameSite)
+	assert.Equal(t, "/", refreshed.Path)
+	assert.Greater(t, refreshed.MaxAge, 0)
+	assert.False(t, refreshed.Secure)
+
+	stAfter := deps.deadbolt.Status()
+	refreshedExp, refreshedEpoch := parseTestSessionCookie(t, refreshed.Value)
+	assert.Equal(t, epoch1, refreshedEpoch)
+	assert.Greater(t, refreshedExp, staleExp.Unix()+30)
+	assert.GreaterOrEqual(t, refreshedExp, stBefore.ExpiresAt.Unix())
+	assert.LessOrEqual(t, refreshedExp, stAfter.ExpiresAt.Unix())
+
+	// Subsequent request using the refreshed cookie does not emit another Set-Cookie.
+	followUp := doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{refreshed})
+	require.Equal(t, http.StatusOK, followUp.Code)
+	assert.Nil(t, findCookie(t, followUp, "netutils_session"))
+
+	// HTTPS refresh sets Secure on the newly emitted cookie.
+	httpsResp := doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{staleCookie}, [2]string{"X-Forwarded-Proto", "https"})
+	require.Equal(t, http.StatusOK, httpsResp.Code)
+	httpsRefreshed := findCookie(t, httpsResp, "netutils_session")
+	require.NotNil(t, httpsRefreshed)
+	assert.True(t, httpsRefreshed.Secure)
+
+	// Locking invalidates and clears the refreshed cookie.
+	require.Equal(t, http.StatusOK, doReqWithCookies(t, deps.handler, http.MethodPost, "/api/lock", "", []*http.Cookie{refreshed}).Code)
+	lockedReplay := doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{refreshed})
+	assert.Equal(t, http.StatusUnauthorized, lockedReplay.Code)
+	if cleared := findCookie(t, lockedReplay, "netutils_session"); assert.NotNil(t, cleared) {
+		assert.Equal(t, -1, cleared.MaxAge)
+	}
+
+	// Re-unlocking rotates epoch so pre-lock cookies remain rejected.
+	require.Equal(t, http.StatusOK, doReq(t, deps.handler, http.MethodPost, "/api/unlock", `{"passphrase":"alpha bravo charlie"}`).Code)
+	require.Greater(t, deps.deadbolt.UnlockEpoch(), epoch1)
+	for _, oldCookie := range []*http.Cookie{staleCookie, refreshed} {
+		rotatedReplay := doReqWithCookies(t, deps.handler, http.MethodGet, "/api/jobs", "", []*http.Cookie{oldCookie})
+		assert.Equal(t, http.StatusUnauthorized, rotatedReplay.Code)
+		if cleared := findCookie(t, rotatedReplay, "netutils_session"); assert.NotNil(t, cleared) {
+			assert.Equal(t, -1, cleared.MaxAge)
+		}
+	}
+}
+
 func TestRunAndJobsEndpoints(t *testing.T) {
 	t.Parallel()
 	deps := newTestStudio(t, "")
@@ -447,9 +569,10 @@ func TestCronJobsFiltersAndWatchlistEndpoints(t *testing.T) {
 		Warmup    bool             `json:"warmup"`
 		Strip     []map[string]any `json:"strip"`
 		Watchlist []struct {
-			Key        string `json:"key"`
-			Hysteresis string `json:"hysteresis"`
-			LastTick   string `json:"last_tick"`
+			Key            string   `json:"key"`
+			Hysteresis     string   `json:"hysteresis"`
+			LastTick       string   `json:"last_tick"`
+			RecentStatuses []string `json:"recent_statuses"`
 		} `json:"watchlist"`
 		Jobs         []map[string]any           `json:"jobs"`
 		LANInventory *dispatch.LANInventoryView `json:"lan_inventory"`
@@ -462,18 +585,23 @@ func TestCronJobsFiltersAndWatchlistEndpoints(t *testing.T) {
 	assert.True(t, cronBody.Warmup)
 	assert.NotEmpty(t, cronBody.Strip)
 	assert.Len(t, cronBody.Jobs, 2)
+	assert.NotZero(t, cronBody.Jobs[0]["duration_ms"])
 	require.NotNil(t, cronBody.LANInventory)
 	assert.Len(t, cronBody.LANInventory.Physical, 1)
 	assert.Len(t, cronBody.LANInventory.Virtual, 1)
 
 	hystByKey := make(map[string]string)
+	recentByKey := make(map[string][]string)
 	for _, w := range cronBody.Watchlist {
 		hystByKey[w.Key] = w.Hysteresis
+		recentByKey[w.Key] = w.RecentStatuses
 		assert.NotEmpty(t, w.LastTick)
 	}
-	assert.Equal(t, "0/2 clear", hystByKey["gw-ping"])
-	assert.Equal(t, "2/2 alert", hystByKey["edge-http"])
-	assert.Equal(t, "1/2 warn", hystByKey["dns-warn"])
+	assert.Equal(t, "Healthy", hystByKey["gw-ping"])
+	assert.Equal(t, "Alerting", hystByKey["edge-http"])
+	assert.Equal(t, "1 failed check", hystByKey["dns-warn"])
+	assert.NotContains(t, recentByKey["gw-ping"], "FAIL")
+	assert.Equal(t, []string{"OK"}, recentByKey["gw-ping"])
 
 	incJobs := doReq(t, deps.handler, http.MethodGet, "/api/jobs?incidents=1&tool=http_ping", "")
 	require.Equal(t, http.StatusOK, incJobs.Code)

@@ -34,6 +34,7 @@ _DEMO_WEBUI_ASSETS = (
     "studio.css",
     "charts.js",
     "studio_destinations.js",
+    "studio_tool_views.js",
     "studio_results.js",
     "studio.js",
 )

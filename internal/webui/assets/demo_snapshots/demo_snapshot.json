@@ -53,9 +53,9 @@
       "updated_at": 1795730200
     },
     {
-      "id": "dest_demo_canary",
-      "name": "Upstream Canary",
-      "target": "canary.example.net",
+      "id": "dest_demo_public_dns",
+      "name": "Public DNS Check",
+      "target": "1.1.1.1",
       "category": "Remote",
       "mac": "",
       "default_check": "recipe_diff_ping",
@@ -93,7 +93,7 @@
     }
   ],
   "default_targets": {
-    "recipe_diff_ping": "canary.example.net",
+    "recipe_diff_ping": "1.1.1.1",
     "recipe_lan_radar": "192.0.2.0/24",
     "recipe_path_autopsy": "198.51.100.44",
     "recipe_diff_dns": "api.example.com",
@@ -103,12 +103,12 @@
     "recipe_wake_verify": "192.0.2.42",
     "render_run_digest": "30d",
     "arp_neighbor_sweep": "192.0.2.0/24",
-    "mtu_path_probe": "canary.example.net",
+    "mtu_path_probe": "1.1.1.1",
     "mtr_path_quality": "198.51.100.44",
     "mdns_ssdp_discover": "192.0.2.0/24",
     "split_dns_audit": "api.example.com",
     "snmp_switch_port": "192.0.2.14",
-    "ping": "canary.example.net",
+    "ping": "1.1.1.1",
     "traceroute": "203.0.113.8",
     "http_ping": "https://api.example.com/health",
     "tls_certificate_check": "api.example.com",
@@ -124,7 +124,7 @@
   "default_run": {
     "job_id": "job-20261126-224500-dp01",
     "tool": "recipe_diff_ping",
-    "target": "canary.example.net",
+    "target": "1.1.1.1",
     "status": "OK",
     "duration_ms": 14,
     "summary": "All 4 path hops reachable with 0% loss; average end-to-end latency 14.2 ms.",
@@ -134,14 +134,14 @@
       { "label": "Local Adapter", "startMs": 0, "durationMs": 0.18 },
       { "label": "Gateway", "startMs": 0.18, "durationMs": 0.64 },
       { "label": "ISP Transit", "startMs": 0.82, "durationMs": 8.45 },
-      { "label": "Canary Edge", "startMs": 9.27, "durationMs": 4.93 },
+      { "label": "Destination", "startMs": 9.27, "durationMs": 4.93 },
       { "label": "Total", "startMs": 0, "durationMs": 14.2, "isTotal": true }
     ],
     "whiskers": [
       { "label": "[1] Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
       { "label": "[2] Gateway (192.0.2.1)", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
       { "label": "[3] ISP Transit", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
-      { "label": "[4] Canary Edge", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+      { "label": "[4] Destination", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
     ]
   },
   "lan_inventory": {
@@ -158,7 +158,7 @@
     "virtual": [
       { "ip": "198.51.100.11", "hostname": "proxy-edge.container.example", "mac": "02:42:00:00:02:11", "vendor": "Container Bridge", "runtime": "Docker bridge", "segment": "laa", "rtt_ms": 0.24, "open_ports": [80, 443, 8443] },
       { "ip": "198.51.100.12", "hostname": "metrics-db.container.example", "mac": "02:42:00:00:02:12", "vendor": "Container Bridge", "runtime": "Docker bridge", "segment": "laa", "rtt_ms": 0.29, "open_ports": [5432, 9090] },
-      { "ip": "198.51.100.24", "hostname": "vm-runner.example", "mac": "02:42:00:00:02:24", "vendor": "Virtual NIC", "runtime": "KVM virtio", "segment": "laa", "rtt_ms": 0.51, "open_ports": [22, 8080] }
+      { "ip": "198.51.100.24", "hostname": "vm-runner.example", "mac": "02:42:00:00:02:24", "vendor": "Virtual MAC (Docker / VM)", "runtime": "KVM virtio", "segment": "laa", "rtt_ms": 0.51, "open_ports": [22, 8080] }
     ],
     "snapshot_diff": {
       "baseline_id": "snap-20261126-1800",
@@ -166,7 +166,7 @@
       "captured_at": "2026-11-26T22:40:00Z",
       "added": ["198.51.100.24 (vm-runner.example) · 02:42:00:00:02:24 · ports 22, 8080"],
       "removed": ["192.0.2.39 (bench-node.example) · 00:00:5E:00:53:39"],
-      "changed": ["192.0.2.10 (nas-01.example) · ports 22,443,445 -> 22,443,445,9100"]
+      "changed": ["192.0.2.10 (nas-01.example) · ports 22, 443, 445 → 22, 443, 445, 9100"]
     }
   },
   "cron": {
@@ -235,18 +235,18 @@
       { "label": "2026-11-26", "status": "WARN", "detail": "44/48 OK · relay-backup jitter spike", "avgMs": 28.4 }
     ],
     "watchlist": [
-      { "key": "gw-core", "target": "192.0.2.1 (gw-core.example)", "check": "ping", "health": "OK", "hysteresis": "Healthy", "avg_ms": 0.42, "max_ms": 0.91, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
-      { "key": "nas-01", "target": "192.0.2.10 (nas-01.example)", "check": "recipe_host_card", "health": "OK", "hysteresis": "Healthy", "avg_ms": 0.68, "max_ms": 1.32, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
-      { "key": "canary", "target": "canary.example.net", "check": "recipe_diff_ping", "health": "OK", "hysteresis": "Healthy", "avg_ms": 14.2, "max_ms": 19.8, "uptime_pct": 99.6, "last_tick": "2026-11-26T22:58:00Z" },
-      { "key": "api-http", "target": "https://api.example.com/health", "check": "recipe_diff_http", "health": "OK", "hysteresis": "Healthy", "avg_ms": 38.6, "max_ms": 51.4, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
-      { "key": "split-dns", "target": "api.example.com", "check": "recipe_diff_dns", "health": "OK", "hysteresis": "Healthy", "avg_ms": 11.4, "max_ms": 16.9, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
-      { "key": "relay-bk", "target": "198.51.100.44 (relay-backup.example.net)", "check": "mtr_path_quality", "health": "WARN", "hysteresis": "Alert Active", "avg_ms": 28.4, "max_ms": 64.2, "uptime_pct": 88.2, "last_tick": "2026-11-26T22:58:00Z" }
+      { "key": "gw-core", "target": "192.0.2.1 (gw-core.example)", "check": "ping", "health": "OK", "hysteresis": "Healthy", "avg_ms": 0.42, "max_ms": 0.91, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z", "recent_statuses": ["OK", "OK", "OK", "OK", "OK", "OK"] },
+      { "key": "nas-01", "target": "192.0.2.10 (nas-01.example)", "check": "recipe_host_card", "health": "OK", "hysteresis": "Healthy", "avg_ms": 0.68, "max_ms": 1.32, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z", "recent_statuses": ["OK", "OK", "OK", "OK", "OK", "OK"] },
+      { "key": "public-dns", "target": "1.1.1.1", "check": "recipe_diff_ping", "health": "OK", "hysteresis": "Healthy", "avg_ms": 14.2, "max_ms": 19.8, "uptime_pct": 99.6, "last_tick": "2026-11-26T22:58:00Z", "recent_statuses": ["OK", "OK", "OK", "OK", "OK", "OK"] },
+      { "key": "api-http", "target": "https://api.example.com/health", "check": "recipe_diff_http", "health": "OK", "hysteresis": "Healthy", "avg_ms": 38.6, "max_ms": 51.4, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z", "recent_statuses": ["OK", "OK", "OK", "OK", "OK", "OK"] },
+      { "key": "split-dns", "target": "api.example.com", "check": "recipe_diff_dns", "health": "OK", "hysteresis": "Healthy", "avg_ms": 11.4, "max_ms": 16.9, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z", "recent_statuses": ["OK", "OK", "OK", "OK", "OK", "OK"] },
+      { "key": "relay-bk", "target": "198.51.100.44 (relay-backup.example.net)", "check": "mtr_path_quality", "health": "WARN", "hysteresis": "Alerting", "avg_ms": 28.4, "max_ms": 64.2, "uptime_pct": 88.2, "last_tick": "2026-11-26T22:58:00Z", "recent_statuses": ["OK", "OK", "WARN", "FAIL", "OK", "WARN"] }
     ],
     "jobs": [
       {
         "job_id": "job-20261126-224500-dp01",
         "tool": "recipe_diff_ping",
-        "target": "canary.example.net",
+        "target": "1.1.1.1",
         "status": "OK",
         "duration_ms": 14,
         "summary": "All 4 path hops reachable with 0% loss; average end-to-end latency 14.2 ms.",
@@ -256,13 +256,13 @@
           { "label": "[1] Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
           { "label": "[2] Gateway", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
           { "label": "[3] ISP Transit", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
-          { "label": "[4] Canary Edge", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+          { "label": "[4] Destination", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
         ],
         "waterfall": [
           { "label": "Local Adapter", "startMs": 0, "durationMs": 0.18 },
           { "label": "Gateway", "startMs": 0.18, "durationMs": 0.64 },
           { "label": "ISP Transit", "startMs": 0.82, "durationMs": 8.45 },
-          { "label": "Canary Edge", "startMs": 9.27, "durationMs": 4.93 },
+          { "label": "Destination", "startMs": 9.27, "durationMs": 4.93 },
           { "label": "Total", "startMs": 0, "durationMs": 14.2, "isTotal": true }
         ]
       },
@@ -396,7 +396,7 @@
       {
         "job_id": "job-20261112-112000-pm09",
         "tool": "mtu_path_probe",
-        "target": "canary.example.net",
+        "target": "1.1.1.1",
         "status": "OK",
         "duration_ms": 33,
         "summary": "Discovered maximum path packet size of 1420 bytes (tunnel headroom normal).",
@@ -536,8 +536,8 @@
     "ping": {
       "status": "OK",
       "duration_ms": 14,
-      "summary": "4/4 replies received from canary.example.net (min 12.1 ms, avg 14.2 ms, max 19.8 ms).",
-      "whiskers": [{ "label": "canary.example.net", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }]
+      "summary": "4/4 replies received from 1.1.1.1 (min 12.1 ms, avg 14.2 ms, max 19.8 ms).",
+      "whiskers": [{ "label": "1.1.1.1", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }]
     },
     "traceroute": {
       "status": "OK",
@@ -596,13 +596,27 @@
       "status": "OK",
       "duration_ms": 4,
       "summary": "Local router DNS (192.0.2.1) returned 203.0.113.44 in 3.8 ms.",
-      "dns_comparisons": [{ "resolver": "Local Router DNS (192.0.2.1)", "latency_ms": 3.8, "answers": ["203.0.113.44"], "status": "OK", "match": true }]
+      "data": {
+        "status": 0, "statusMessage": "NOERROR", "truncated": false, "authenticatedData": false, "checkingDisabled": false,
+        "question": [{ "name": "api.example.com.", "type": 1, "typeName": "A" }],
+        "answer": [
+          { "name": "api.example.com.", "type": 1, "typeName": "A", "TTL": 1876, "data": "203.0.113.44" },
+          { "name": "api.example.com.", "type": 1, "typeName": "A", "TTL": 300, "data": "203.0.113.45" }
+        ]
+      }
     },
     "remote_dns_query": {
       "status": "OK",
       "duration_ms": 11,
       "summary": "Public DoH resolver (203.0.113.53) returned 203.0.113.44 in 11.4 ms.",
-      "dns_comparisons": [{ "resolver": "Public DoH (203.0.113.53)", "latency_ms": 11.4, "answers": ["203.0.113.44"], "status": "OK", "match": true }]
+      "data": {
+        "status": 0, "statusMessage": "NOERROR", "truncated": false, "authenticatedData": true, "checkingDisabled": false,
+        "question": [{ "name": "api.example.com.", "type": 1, "typeName": "A" }],
+        "answer": [
+          { "name": "api.example.com.", "type": 1, "typeName": "A", "TTL": 1876, "data": "203.0.113.44" },
+          { "name": "api.example.com.", "type": 1, "typeName": "A", "TTL": 300, "data": "203.0.113.45" }
+        ]
+      }
     },
     "dns_reverse_batch": {
       "status": "OK",
@@ -611,7 +625,7 @@
       "dns_comparisons": [
         { "resolver": "192.0.2.1", "latency_ms": 2.1, "answers": ["gw-core.example"], "status": "OK", "match": true },
         { "resolver": "192.0.2.10", "latency_ms": 2.4, "answers": ["nas-01.example"], "status": "OK", "match": true },
-        { "resolver": "203.0.113.8", "latency_ms": 4.8, "answers": ["canary.example.net"], "status": "OK", "match": true }
+        { "resolver": "203.0.113.8", "latency_ms": 4.8, "answers": ["edge.example.net"], "status": "OK", "match": true }
       ]
     },
     "whois_query": {

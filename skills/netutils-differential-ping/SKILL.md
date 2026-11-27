@@ -21,7 +21,7 @@ Operational playbook for isolating *where* a network outage or latency spike ori
 Run `recipe_diff_ping` first on any "host unreachable" or "internet is slow" report. It evaluates 4 deterministic stages plus L2/L4 corroboration:
 
 ```text
-[1] Local NIC -> [2] LAN Gateway -> [3] WireGuard/WAN Peer -> [4] Canary + Target
+[1] Local Adapter -> [2] LAN Gateway -> [3] WireGuard/WAN Peer -> [4] Public DNS + Target
 ```
 
 Plus side-checks:
@@ -32,11 +32,11 @@ Plus side-checks:
 
 | Failing Stage | Likely Root Cause | Next Action |
 | :--- | :--- | :--- |
-| **[1] Local NIC** | Container/host interface down, missing route, or namespace isolation | Inspect local link/routes; verify `cap_net_raw` or socket permissions |
+| **[1] Local Adapter** | Container/host interface down, missing route, or namespace isolation | Inspect local link/routes; verify `cap_net_raw` or socket permissions |
 | **[2] LAN Gateway** | Switch link flap, bad cable, VLAN mismatch, or ARP failure | Check ARP state; run `recipe_lan_radar` / `snmp_switch_port` |
 | **[3] WireGuard/WAN Peer** | Tunnel handshake expired, ISP modem drop, or tunnel MTU mismatch | Run `mtu_path_probe` (`1420` vs `1500`) and `mtr_path_quality` |
-| **[4] Canary OK, Target FAIL** | Remote host down, firewall drop, or target-specific port block | Compare ICMP vs TCP SYN-ACK/RST; run `recipe_path_autopsy` |
-| **[4] Canary FAIL & Target FAIL** | Upstream ISP transit outage or DNS/egress blockage | Run `mtr_path_quality` toward canary (`1.1.1.1`) to locate hop drop |
+| **[4] Public DNS OK, Target FAIL** | Remote host down, firewall drop, or target-specific port block | Compare ICMP vs TCP SYN-ACK/RST; run `recipe_path_autopsy` |
+| **[4] Public DNS FAIL & Target FAIL** | Upstream ISP transit outage or DNS/egress blockage | Run `mtr_path_quality` toward reference host (`1.1.1.1`) to locate hop drop |
 
 ## Interpreting `probe_mode` (`icmp` vs `tcp_fallback`)
 

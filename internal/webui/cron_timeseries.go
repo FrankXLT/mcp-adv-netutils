@@ -85,10 +85,62 @@ func buildCronTimeseries(
 		return nil, "", 0, fmt.Errorf("query timeseries jobs: %w", err)
 	}
 	byTS, coveredDays := aggregateJobsToBuckets(jobs, int64(step.Seconds()))
+	if normRange == "24h" && len(jobs) >= 2 && len(byTS) < 4 {
+		buckets, sampleCount := buildPerRunBuckets(jobs)
+		return buckets, normRange, sampleCount, nil
+	}
 	if cronStatus != nil && (normRange != "24h" || len(byTS) == 0) {
 		mergeDailyStatsIntoBuckets(byTS, coveredDays, cronStatus.DailyStats, since.Format("2006-01-02"), nowUTC.Format("2006-01-02"))
 	}
 	return finalizeTimeseriesBuckets(byTS, normRange)
+}
+
+func buildPerRunBuckets(jobs []store.JobRecord) ([]CronTimeseriesBucket, int64) {
+	sorted := make([]store.JobRecord, len(jobs))
+	copy(sorted, jobs)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].CreatedAt != sorted[j].CreatedAt {
+			return sorted[i].CreatedAt < sorted[j].CreatedAt
+		}
+		return sorted[i].JobID < sorted[j].JobID
+	})
+	sampleCount := int64(len(sorted))
+	if len(sorted) > 120 {
+		sorted = sorted[len(sorted)-120:]
+	}
+	out := make([]CronTimeseriesBucket, 0, len(sorted))
+	for i := range sorted {
+		j := &sorted[i]
+		st := "FAIL"
+		var okCnt, warnCnt, failCnt int64
+		var uptimePct float64
+		switch strings.ToUpper(strings.TrimSpace(j.Status)) {
+		case "OK":
+			st = "OK"
+			okCnt = 1
+			uptimePct = 100
+		case "WARN":
+			st = "WARN"
+			warnCnt = 1
+		default:
+			failCnt = 1
+		}
+		dur := float64(j.DurationMS)
+		out = append(out, CronTimeseriesBucket{
+			TS:         j.CreatedAt,
+			Label:      time.Unix(j.CreatedAt, 0).UTC().Format("15:04:05"),
+			AvgMS:      dur,
+			MaxMS:      dur,
+			MinMS:      dur,
+			OKCount:    okCnt,
+			WarnCount:  warnCnt,
+			FailCount:  failCnt,
+			TotalCount: 1,
+			UptimePct:  uptimePct,
+			Status:     st,
+		})
+	}
+	return out, sampleCount
 }
 
 func aggregateJobsToBuckets(jobs []store.JobRecord, stepSec int64) (map[int64]*tsBucketAgg, map[string]bool) {

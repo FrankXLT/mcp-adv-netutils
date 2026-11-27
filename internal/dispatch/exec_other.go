@@ -72,7 +72,7 @@ func (d *Dispatcher) runRecipeTool(ctx context.Context, tool string, r *argReade
 	switch tool {
 	case "recipe_diff_ping":
 		target = r.str("target")
-		p := recipes.DiffPingParams{Target: target, Gateway: r.str("gateway"), WireGuardPeer: r.str("wireguard_peer"), Canary: r.str("canary"), Count: r.i("count")}
+		p := recipes.DiffPingParams{Target: target, Gateway: r.str("gateway"), WireGuardPeer: r.str("wireguard_peer"), Canary: r.str("reference_host", "canary"), Count: r.i("count")}
 		if r.err == nil {
 			res, err = recipes.ExecuteDiffPing(ctx, deps, p)
 		}
@@ -227,7 +227,7 @@ func buildARPSweepExec(res *probe.ARPSweepResult, durMS int64) *toolExec {
 	for i := range res.Neighbors {
 		n := &res.Neighbors[i]
 		if n.IsLAA {
-			virt = append(virt, LANHostView{IP: n.IP, Hostname: n.Hostname, MAC: n.MAC, Vendor: n.Vendor, Runtime: "LAA / Virtual", Segment: "laa"})
+			virt = append(virt, LANHostView{IP: n.IP, Hostname: n.Hostname, MAC: n.MAC, Vendor: n.Vendor, Runtime: "Virtual MAC (Docker / VM)", Segment: "laa"})
 		} else {
 			phys = append(phys, LANHostView{IP: n.IP, Hostname: n.Hostname, MAC: n.MAC, Vendor: n.Vendor, Segment: "uaa"})
 		}

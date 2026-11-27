@@ -3,6 +3,7 @@ package dispatch
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 type jobPayloadEnvelope struct {
 	Raw            json.RawMessage    `json:"raw,omitempty"`
 	ASCII          map[string]string  `json:"ascii,omitempty"`
+	ElapsedMS      float64            `json:"elapsed_ms,omitempty"`
 	Whiskers       []WhiskerPoint     `json:"whiskers,omitempty"`
 	Waterfall      []WaterfallPhase   `json:"waterfall,omitempty"`
 	LANInventory   *LANInventoryView  `json:"lan_inventory,omitempty"`
@@ -38,15 +40,16 @@ type lockedCronSummary struct {
 }
 
 type jobFallbackRaw struct {
-	JobID      string `json:"job_id"`
-	Tool       string `json:"tool"`
-	Target     string `json:"target"`
-	Status     string `json:"status"`
-	Summary    string `json:"summary"`
-	CreatedAt  string `json:"created_at,omitempty"`
-	ExpiresAt  string `json:"expires_at,omitempty"`
-	DurationMS int64  `json:"duration_ms"`
-	DownAged   bool   `json:"down_aged,omitempty"`
+	JobID      string  `json:"job_id"`
+	Tool       string  `json:"tool"`
+	Target     string  `json:"target"`
+	Status     string  `json:"status"`
+	Summary    string  `json:"summary"`
+	CreatedAt  string  `json:"created_at,omitempty"`
+	ExpiresAt  string  `json:"expires_at,omitempty"`
+	DurationMS int64   `json:"duration_ms"`
+	ElapsedMS  float64 `json:"elapsed_ms,omitempty"`
+	DownAged   bool    `json:"down_aged,omitempty"`
 }
 
 type cardSpec struct {
@@ -90,13 +93,32 @@ func makeExecCard(s *cardSpec) *toolExec {
 	}
 }
 
-func finalizeOutcome(tool, normStyle string, execRes *toolExec, now time.Time, durMS int64, jobID string, expiresAt time.Time) (*Outcome, error) {
+func measureDuration(started time.Time) (int64, float64) {
+	if started.IsZero() {
+		return 0, 0
+	}
+	elapsed := time.Since(started)
+	elapsedMS := math.Round(float64(elapsed.Microseconds())/10.0) / 100.0
+	if elapsed > 0 && elapsedMS < 0.01 {
+		elapsedMS = 0.01
+	}
+	durMS := elapsed.Milliseconds()
+	if elapsed > 0 && durMS == 0 {
+		durMS = 1
+	}
+	return durMS, elapsedMS
+}
+
+func finalizeOutcome(tool, normStyle string, execRes *toolExec, now time.Time, durMS int64, elapsedMS float64, jobID string, expiresAt time.Time) (*Outcome, error) {
 	card := execRes.Card
 	if card == nil {
 		card = &ascii.ReportCard{Title: strings.ToUpper(tool), ToolName: tool, Target: execRes.Target, Status: execRes.Status, Summary: execRes.Summary, RawJSON: execRes.Data}
 	}
 	if durMS <= 0 && card.DurationMS > 0 {
 		durMS = card.DurationMS
+	}
+	if elapsedMS <= 0 && durMS > 0 {
+		elapsedMS = float64(durMS)
 	}
 	card.ToolName, card.Target = tool, firstNonEmpty(card.Target, execRes.Target)
 	card.Status, card.Summary = firstNonEmpty(card.Status, execRes.Status, statusOK), firstNonEmpty(card.Summary, execRes.Summary)
@@ -118,7 +140,7 @@ func finalizeOutcome(tool, normStyle string, execRes *toolExec, now time.Time, d
 	}
 	return &Outcome{
 		JobID: jobID, Tool: tool, Target: firstNonEmpty(execRes.Target, card.Target), Status: card.Status,
-		Summary: card.Summary, CreatedAt: now.UTC().Format(time.RFC3339), ExpiresAt: expiresStr, DurationMS: durMS,
+		Summary: card.Summary, CreatedAt: now.UTC().Format(time.RFC3339), ExpiresAt: expiresStr, DurationMS: durMS, ElapsedMS: elapsedMS,
 		Style: normStyle, Output: output, ASCII: asciiMap, Data: execRes.Data, Whiskers: execRes.Whiskers,
 		Waterfall: execRes.Waterfall, LANInventory: execRes.LANInventory, SnapshotDiff: execRes.SnapshotDiff,
 		TLSHealth: execRes.TLSHealth, DNSComparisons: execRes.DNSComparisons, Deadbolt: execRes.Deadbolt,
@@ -155,7 +177,7 @@ func encodePayloadEnvelope(out *Outcome) (string, error) {
 		rawMsg = rawBytes
 	}
 	data, err := json.Marshal(jobPayloadEnvelope{
-		Raw: rawMsg, ASCII: out.ASCII, Whiskers: out.Whiskers, Waterfall: out.Waterfall,
+		Raw: rawMsg, ASCII: out.ASCII, ElapsedMS: out.ElapsedMS, Whiskers: out.Whiskers, Waterfall: out.Waterfall,
 		LANInventory: out.LANInventory, SnapshotDiff: out.SnapshotDiff,
 		TLSHealth: out.TLSHealth, DNSComparisons: out.DNSComparisons,
 	})
@@ -177,11 +199,15 @@ func outcomeFromJobRecord(rec *store.JobRecord, normStyle string) (*Outcome, err
 			_ = json.Unmarshal([]byte(rec.PayloadJSON), &rawData)
 		}
 	}
+	elapsedMS := env.ElapsedMS
+	if elapsedMS <= 0 && rec.DurationMS > 0 {
+		elapsedMS = float64(rec.DurationMS)
+	}
 	createdStr, expiresStr := formatUnixTime(rec.CreatedAt), formatUnixTime(rec.ExpiresAt)
 	if rawData == nil {
 		rawData = jobFallbackRaw{
 			JobID: rec.JobID, Tool: rec.ToolName, Target: rec.Target, Status: rec.Status, Summary: rec.Summary,
-			CreatedAt: createdStr, ExpiresAt: expiresStr, DurationMS: rec.DurationMS, DownAged: rec.DownAged,
+			CreatedAt: createdStr, ExpiresAt: expiresStr, DurationMS: rec.DurationMS, ElapsedMS: elapsedMS, DownAged: rec.DownAged,
 		}
 	}
 	var notes []string
@@ -205,7 +231,7 @@ func outcomeFromJobRecord(rec *store.JobRecord, normStyle string) (*Outcome, err
 	}
 	return &Outcome{
 		JobID: rec.JobID, Tool: rec.ToolName, Target: rec.Target, Status: rec.Status, Summary: rec.Summary,
-		CreatedAt: createdStr, ExpiresAt: expiresStr, DurationMS: rec.DurationMS, Style: normStyle,
+		CreatedAt: createdStr, ExpiresAt: expiresStr, DurationMS: rec.DurationMS, ElapsedMS: elapsedMS, Style: normStyle,
 		Output: output, ASCII: asciiMap, Data: rawData, Whiskers: env.Whiskers, Waterfall: env.Waterfall,
 		LANInventory: env.LANInventory, SnapshotDiff: env.SnapshotDiff,
 		TLSHealth: env.TLSHealth, DNSComparisons: env.DNSComparisons,
@@ -235,7 +261,7 @@ func hydrateASCIIFromRecord(rec *store.JobRecord, env *jobPayloadEnvelope, card 
 }
 
 func hasEnvelopeContent(env *jobPayloadEnvelope) bool {
-	return len(env.Raw) > 0 || len(env.ASCII) > 0 || len(env.Whiskers) > 0 ||
+	return len(env.Raw) > 0 || len(env.ASCII) > 0 || env.ElapsedMS > 0 || len(env.Whiskers) > 0 ||
 		len(env.Waterfall) > 0 || env.LANInventory != nil || env.SnapshotDiff != nil ||
 		env.TLSHealth != nil || len(env.DNSComparisons) > 0
 }

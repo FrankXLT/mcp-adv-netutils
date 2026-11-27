@@ -21,8 +21,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&amp;display=swap" rel="stylesheet" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="./assets/oaw_topbar.css?v=2.0.0" />
-  <link rel="stylesheet" href="./assets/site.css?v=2.0.0" />
+  <link rel="stylesheet" href="./assets/oaw_topbar.css?v=2.0.1" />
+  <link rel="stylesheet" href="./assets/site.css?v=2.0.1" />
 </head>
 <body>
   <a class="oaw-skip-link" href="#mainContent">Skip to content</a>
@@ -365,12 +365,12 @@
               <span class="ascii-tier-meta">&le; 40 cols &middot; phone chat</span>
             </div>
             <pre class="ascii-preview" tabindex="0">[OK] recipe_diff_ping (14.2ms)
-Target: canary.example.net (203.0.113.8)
+Target: edge.example.net (203.0.113.8)
 ────────────────────────────────────────
-[1] NIC     0.18ms (0.12-0.31)   0% loss
+[1] Local   0.18ms (0.12-0.31)   0% loss
 [2] GW      0.82ms (0.41-1.45)   0% loss
 [3] WG/WAN  9.27ms (7.90-13.40)  0% loss
-[4] Canary 14.20ms (12.10-19.80) 0% loss
+[4] Target 14.20ms (12.10-19.80) 0% loss
 ────────────────────────────────────────
 job_id: job-20261126-dp01  exp: 30d</pre>
             <p class="ascii-card-foot">Compact borderless lines that never wrap awkwardly on narrow phone screens.</p>
@@ -382,13 +382,13 @@ job_id: job-20261126-dp01  exp: 30d</pre>
             </div>
             <pre class="ascii-preview" tabindex="0">recipe_diff_ping — Multi-Point Check   │ [OK] 14ms
 ════════════════════════════════════════╪═══════════════════════════════
-Target: canary.example.net (203.0.113.8)  |  Job: job-20261126-dp01
+Target: edge.example.net (203.0.113.8)    |  Job: job-20261126-dp01
 ────────────────────────────────────────────────────────────────────────
 Stage         Endpoint          Min ms   Avg ms   Max ms  Loss   Mode
-[1] NIC       eth0                0.12     0.18     0.31  0.0%   icmp
+[1] Local     eth0                0.12     0.18     0.31  0.0%   icmp
 [2] GW        192.0.2.1           0.41     0.82     1.45  0.0%   icmp
 [3] WG/WAN    198.51.100.1        7.90     9.27    13.40  0.0%   icmp
-[4] Canary    203.0.113.8        12.10    14.20    19.80  0.0%   icmp
+[4] Target    203.0.113.8        12.10    14.20    19.80  0.0%   icmp
 ────────────────────────────────────────────────────────────────────────
 VERDICT: Path healthy; WAN delta +8.45 ms (within 25 ms target) · 30d</pre>
             <p class="ascii-card-foot">Balanced 72-column summary card for desktop chat panes and IDE terminals.</p>
@@ -399,15 +399,15 @@ VERDICT: Path healthy; WAN delta +8.45 ms (within 25 ms target) · 30d</pre>
               <span class="ascii-tier-meta">76 cols &middot; wide terminal</span>
             </div>
             <pre class="ascii-preview" tabindex="0">╔══════════════════════════════════════════════════════════════════════════╗
-║ recipe_diff_ping — canary.example.net          [OK] 14ms  expires: 30d   ║
+║ recipe_diff_ping — edge.example.net            [OK] 14ms  expires: 30d   ║
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║ Total RTT: 14.20 ms (p95 jitter 2.1 ms) │ Trend:  ▁▂▃▂▄▃▂▁▂▃▄▃▂▁▂▃▂▁▂▃▂▁ ║
 ║ Active Probes: 4/4 OK (icmp + tcp_rst)  │ Health: ██████████████████████ ║
 ╟─────────────────────────────────────────┴────────────────────────────────╢
-║ [1] NIC    eth0          min  0.12 | avg  0.18 | max  0.31 ms | loss  0% ║
+║ [1] Local  eth0          min  0.12 | avg  0.18 | max  0.31 ms | loss  0% ║
 ║ [2] GW     192.0.2.1     min  0.41 | avg  0.82 | max  1.45 ms | loss  0% ║
 ║ [3] WG/WAN 198.51.100.1  min  7.90 | avg  9.27 | max 13.40 ms | loss  0% ║
-║ [4] Canary 203.0.113.8   min 12.10 | avg 14.20 | max 19.80 ms | loss  0% ║
+║ [4] Target 203.0.113.8   min 12.10 | avg 14.20 | max 19.80 ms | loss  0% ║
 ╟──────────────────────────────────────────────────────────────────────────╢
 ║ Legend: █ OK  ▒ WARN  ! FAIL  · empty  ▁..█ trend                        ║
 ╚══════════════════════════════════════════════════════════════════════════╝</pre>
@@ -462,6 +462,6 @@ VERDICT: Path healthy; WAN delta +8.45 ms (within 25 ms target) · 30d</pre>
     </div>
   </footer>
 
-  <script defer src="./assets/site.js?v=2.0.0"></script>
+  <script defer src="./assets/site.js?v=2.0.1"></script>
 </body>
 </html>

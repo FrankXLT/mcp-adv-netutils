@@ -249,15 +249,20 @@
   }
 
   @media (max-width: 679px) {
-    .oaw-topbar { padding-inline: 6px; gap: 4px; }
-    .oaw-topbar-left, .oaw-topbar-right { gap: 4px; }
-    .oaw-wordmark { font-size: max(11px, 0.72rem); padding: 3px 4px; gap: 4px; }
-    .oaw-pill-trigger { max-inline-size: none; padding-inline: 7px; font-size: max(11px, 0.72rem); gap: 4px; }
+    .oaw-topbar { padding-inline: 6px; gap: 3px; }
+    .oaw-topbar-left, .oaw-topbar-right { gap: 3px; }
+    .oaw-wordmark { font-size: 11px; padding: 3px 3px; gap: 3px; letter-spacing: -0.02em; }
+    .oaw-pill-trigger { max-inline-size: none; padding-inline: 6px; font-size: 11px; gap: 3px; }
     .oaw-context-tabs { display: none; }
     .oaw-pop-mobile-tabs { display: flex; }
     .oaw-pop-tab, .oaw-theme-opt, .oaw-pop-row { min-block-size: 40px; }
     .oaw-user-label, .oaw-user-chevron { display: none; }
-    .oaw-user-btn { inline-size: 32px; padding: 0; justify-content: center; }
+    .oaw-pillar-btn, .oaw-user-btn { inline-size: 28px; block-size: 28px; min-block-size: 28px; }
+    .oaw-user-btn { padding: 0; justify-content: center; }
+  }
+
+  @media (max-width: 440px) {
+    .oaw-pill-trigger > svg:first-child { inline-size: 12px; block-size: 12px; }
   }
 
   body.oaw-demo-page .va-shell-topbar { position: static; }
@@ -271,5 +276,12 @@
 
   @media print {
     .oaw-topbar, [popover].oaw-popover { display: none; }
+  }
+}
+
+@layer utilities {
+  @media (max-width: 679px) {
+    #oawTopbar .oaw-pill-trigger { block-size: 32px; min-block-size: 32px; }
+    #oawTopbar .oaw-pillar-btn, #oawTopbar .oaw-user-btn { inline-size: 28px; block-size: 28px; min-block-size: 28px; }
   }
 }

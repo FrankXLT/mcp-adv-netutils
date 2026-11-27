@@ -49,14 +49,14 @@ func TestExecuteDiffPingAndTCPRSTDiagnosis(t *testing.T) {
 	assert.Equal(t, "RST", checks[1].State)
 
 	diag, st := diagnoseDiffPing([]DiffPingHop{
-		{Stage: "[1] NIC/Loopback", Status: StatusOK},
+		{Stage: "[1] Local Adapter", Status: StatusOK},
 		{Stage: "[5] Target", Status: StatusFAIL},
 	}, checks)
 	assert.Equal(t, StatusWARN, st)
 	assert.Contains(t, diag, "TCP RST/SYN-ACK proves bidirectional L3 routing")
 
 	okDiag, okSt := diagnoseDiffPing([]DiffPingHop{
-		{Stage: "[1] NIC/Loopback", Status: StatusOK},
+		{Stage: "[1] Local Adapter", Status: StatusOK},
 		{Stage: "[5] Target", Status: StatusOK},
 	}, checks)
 	assert.Equal(t, StatusOK, okSt)
@@ -166,6 +166,7 @@ func TestExecuteDiffHTTP(t *testing.T) {
 	res, err := ExecuteDiffHTTP(context.Background(), deps, DiffHTTPParams{URL: srvOK.URL, CompareURLs: []string{srvFail.URL}, Count: 1})
 	require.NoError(t, err)
 	assert.Equal(t, StatusFAIL, res.Status)
+	assert.Equal(t, "Compared 2 HTTPS endpoints — failed", res.Summary)
 	data, ok := res.Data.(DiffHTTPData)
 	require.True(t, ok)
 	require.Len(t, data.Endpoints, 2)
@@ -173,10 +174,24 @@ func TestExecuteDiffHTTP(t *testing.T) {
 	assert.Equal(t, StatusOK, data.Endpoints[0].Status)
 	require.NotNil(t, data.Endpoints[0].ChainValid)
 	assert.True(t, *data.Endpoints[0].ChainValid)
+	assert.NotEmpty(t, data.Endpoints[0].Issuer)
+	assert.NotEmpty(t, data.Endpoints[0].TLSVersion)
+	assert.NotEmpty(t, data.Endpoints[0].CipherSuite)
+	assert.NotEmpty(t, data.Endpoints[0].Subject)
+	assert.NotEmpty(t, data.Endpoints[0].NotAfter)
 	assert.Equal(t, http.StatusServiceUnavailable, data.Endpoints[1].StatusCode)
 	assert.Equal(t, StatusFAIL, data.Endpoints[1].Status)
 	assert.Len(t, res.Card.Rows, 2)
 	assert.Len(t, res.SparkValues, 2)
+
+	singleRes, err := ExecuteDiffHTTP(context.Background(), deps, DiffHTTPParams{URL: srvOK.URL, Count: 1})
+	require.NoError(t, err)
+	assert.Equal(t, StatusOK, singleRes.Status)
+	assert.Equal(t, "Checked 1 HTTPS endpoint — healthy", singleRes.Summary)
+
+	assert.Equal(t, "Checked 1 HTTPS endpoint — healthy", formatDiffHTTPSummary([]DiffHTTPEndpoint{{URL: "https://example.com"}}, StatusOK))
+	assert.Equal(t, "Compared 2 HTTPS endpoints — failed", formatDiffHTTPSummary([]DiffHTTPEndpoint{{URL: "https://a.example"}, {URL: "https://b.example"}}, StatusFAIL))
+	assert.Equal(t, "Checked 1 HTTP endpoint — needs attention", formatDiffHTTPSummary([]DiffHTTPEndpoint{{URL: "http://example.com"}}, StatusWARN))
 }
 
 func TestExecuteDiffSnapshot(t *testing.T) {

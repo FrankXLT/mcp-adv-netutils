@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -485,5 +486,91 @@ func TestTargetGuardDialContextPinsValidatedIP(t *testing.T) {
 		connLit, litErr := nilGuard.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
 		require.NoError(t, litErr)
 		_ = connLit.Close()
+	})
+
+	t.Run("dials IPv4 before IPv6 while preserving within-family order", func(t *testing.T) {
+		g, gErr := NewTargetGuard(nil, nil)
+		require.NoError(t, gErr)
+
+		g.lookupIPAddr = func(_ context.Context, _ string) ([]net.IPAddr, error) {
+			return []net.IPAddr{
+				{IP: net.ParseIP("2001:db8::1")},
+				{IP: net.ParseIP("127.0.0.2")},
+				{IP: net.ParseIP("::1")},
+				{IP: net.ParseIP("127.0.0.1")},
+			}, nil
+		}
+
+		var dialed []string
+		realDialer := &net.Dialer{}
+		g.dialContext = func(dCtx context.Context, network, addr string) (net.Conn, error) {
+			dialed = append(dialed, addr)
+			host, _, splitErr := net.SplitHostPort(addr)
+			if splitErr == nil && host == "127.0.0.1" {
+				return realDialer.DialContext(dCtx, network, addr)
+			}
+			return nil, os.NewSyscallError("connect", syscall.ECONNREFUSED)
+		}
+
+		conn, dErr := g.DialContext(ctx, "tcp", net.JoinHostPort("dualstack.example", port))
+		require.NoError(t, dErr)
+		assert.Equal(t, net.JoinHostPort("127.0.0.1", port), conn.RemoteAddr().String())
+		_ = conn.Close()
+		assert.Equal(t, []string{
+			net.JoinHostPort("127.0.0.2", port),
+			net.JoinHostPort("127.0.0.1", port),
+		}, dialed)
+	})
+
+	t.Run("preserves IPv4 error over trailing IPv6 EADDRNOTAVAIL", func(t *testing.T) {
+		closedLn, listenErr := net.Listen("tcp4", "127.0.0.1:0")
+		require.NoError(t, listenErr)
+		_, closedPort, splitErr := net.SplitHostPort(closedLn.Addr().String())
+		require.NoError(t, splitErr)
+		require.NoError(t, closedLn.Close())
+
+		g, gErr := NewTargetGuard(nil, nil)
+		require.NoError(t, gErr)
+
+		g.lookupIPAddr = func(_ context.Context, host string) ([]net.IPAddr, error) {
+			if host == "v6promote.example" {
+				return []net.IPAddr{
+					{IP: net.ParseIP("2001:db8::1")},
+					{IP: net.ParseIP("2001:db8::2")},
+				}, nil
+			}
+			return []net.IPAddr{
+				{IP: net.ParseIP("2001:db8::1")},
+				{IP: net.ParseIP("127.0.0.1")},
+			}, nil
+		}
+
+		var dialed []string
+		realDialer := &net.Dialer{}
+		g.dialContext = func(dCtx context.Context, network, addr string) (net.Conn, error) {
+			dialed = append(dialed, addr)
+			host, _, addrErr := net.SplitHostPort(addr)
+			if addrErr == nil && host == "127.0.0.1" {
+				return realDialer.DialContext(dCtx, network, addr)
+			}
+			if addrErr == nil && host == "2001:db8::2" {
+				return nil, os.NewSyscallError("connect", syscall.ECONNREFUSED)
+			}
+			return nil, os.NewSyscallError("connect", syscall.EADDRNOTAVAIL)
+		}
+
+		_, dErr := g.DialContext(ctx, "tcp", net.JoinHostPort("v4fail.example", closedPort))
+		require.Error(t, dErr)
+		require.ErrorIs(t, dErr, syscall.ECONNREFUSED)
+		assert.False(t, errors.Is(dErr, syscall.EADDRNOTAVAIL))
+		assert.Equal(t, []string{
+			net.JoinHostPort("127.0.0.1", closedPort),
+			net.JoinHostPort("2001:db8::1", closedPort),
+		}, dialed)
+
+		_, v6Err := g.DialContext(ctx, "tcp", net.JoinHostPort("v6promote.example", closedPort))
+		require.Error(t, v6Err)
+		require.ErrorIs(t, v6Err, syscall.ECONNREFUSED)
+		assert.False(t, errors.Is(v6Err, syscall.EADDRNOTAVAIL))
 	})
 }

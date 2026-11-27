@@ -1,7 +1,7 @@
 (function (globalScope) {
   "use strict";
 
-  const state = { deps: null, drawerJob: null, drawerReqSeq: 0, scrollOpSeq: 0 };
+  const state = { deps: null, drawerJob: null, drawerReqSeq: 0, scrollOpSeq: 0, focusHighlightEl: null };
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -39,8 +39,17 @@
     if (seq !== state.scrollOpSeq) return;
     if (typeof targetEl.focus === "function") targetEl.focus({ preventScroll: true });
     const hl = highlightEl || targetEl;
+    if (state.focusHighlightEl && state.focusHighlightEl !== hl) {
+      state.focusHighlightEl.classList.remove("is-focus-highlight");
+    }
+    state.focusHighlightEl = hl;
     hl.classList.add("is-focus-highlight");
-    globalScope.setTimeout(() => { if (seq === state.scrollOpSeq) hl.classList.remove("is-focus-highlight"); }, 1200);
+    globalScope.setTimeout(() => {
+      if (seq === state.scrollOpSeq || state.focusHighlightEl !== hl) {
+        hl.classList.remove("is-focus-highlight");
+        if (state.focusHighlightEl === hl) state.focusHighlightEl = null;
+      }
+    }, 1200);
   }
 
   function beginRunFocus(tool, targetLabel, isAsync) {
@@ -55,6 +64,41 @@
     focusTargetSection(card, card);
   }
 
+  function renderTlsStrip(stripEl, tls) {
+    if (!stripEl) return;
+    if (!tls || typeof tls !== "object") { stripEl.hidden = true; stripEl.replaceChildren(); return; }
+    const days = Number(tls.days_remaining ?? 0), valid = Boolean(tls.valid) && Boolean(tls.hostname_match);
+    const tone = !valid || days <= 7 ? "fault" : days < 30 ? "warn" : "nominal";
+    const pill = el("span", "va-pill", (valid ? "TLS Valid" : "TLS Attention") + " · " + days + "d left");
+    pill.setAttribute("data-variant", "status"); pill.setAttribute("data-state", tone);
+    const addMeta = (k, v) => {
+      const wrap = el("span", "tls-meta-item"), strong = el("strong", "", k + ": ");
+      wrap.append(strong, document.createTextNode(String(v || "—")));
+      return wrap;
+    };
+    const kids = [pill, addMeta("Host", tls.subject), addMeta("Issuer", tls.issuer)];
+    if (tls.protocol || tls.cipher) kids.push(addMeta("Protocol", [tls.protocol, tls.cipher].filter(Boolean).join(" ")));
+    if (tls.not_after) kids.push(addMeta("Expires", String(tls.not_after).replace("T", " ").slice(0, 16) + "Z"));
+    kids.push(addMeta("Name Match", tls.hostname_match ? "Verified" : "Mismatch"));
+    stripEl.replaceChildren.apply(stripEl, kids);
+    stripEl.hidden = false;
+  }
+
+  function renderStructuredTable(wrapEl, tblSpec) {
+    if (!wrapEl) return;
+    if (!tblSpec || !Array.isArray(tblSpec.headers) || !tblSpec.headers.length || !Array.isArray(tblSpec.rows) || !tblSpec.rows.length) {
+      wrapEl.replaceChildren(); wrapEl.hidden = true; return;
+    }
+    const tbl = el("table", "va-data-table"), thead = document.createElement("thead"), hr = document.createElement("tr"), tbody = document.createElement("tbody");
+    tblSpec.headers.forEach((h) => hr.appendChild(el("th", "", h)));
+    thead.appendChild(hr);
+    const rowFn = state.deps && typeof state.deps.renderTableRows === "function" ? state.deps.renderTableRows : renderTableRows;
+    rowFn(tbody, tblSpec.rows, (r) => ({ cells: tblSpec.headers.map((h, i) => [h, r[i] ?? "—", i > 0 ? "tabular-nums" : ""]) }));
+    tbl.append(thead, tbody);
+    wrapEl.replaceChildren(tbl);
+    wrapEl.hidden = false;
+  }
+
   function renderDnsTable(wrapEl, rows) {
     if (!wrapEl) return;
     if (!Array.isArray(rows) || !rows.length) { wrapEl.replaceChildren(); return; }
@@ -64,7 +108,7 @@
     state.deps.renderTableRows(tbody, rows, (r) => {
       const st = String(r.status || "OK").toUpperCase(), pill = el("span", "va-pill", st);
       state.deps.setStatusPill(pill, st, state.deps.badgeVariant(st));
-      const ans = Array.isArray(r.answers) && r.answers.length ? r.answers.join(", ") : "none";
+      const ans = Array.isArray(r.answers) && r.answers.length ? r.answers.join(", ") : "None";
       return {
         cells: [
           ["Resolver", r.resolver],
@@ -78,85 +122,158 @@
     wrapEl.replaceChildren(tbl);
   }
 
-  function buildExportData(run) {
-    const checkName = state.deps.getCheckLabel(run.tool);
+  function outcomeDurationMs(run) {
+    const r = run || {};
+    return Number(r.elapsed_ms) > 0 ? Number(r.elapsed_ms) : Number(r.duration_ms || 0);
+  }
+
+  function buildFallbackFacts(run) {
+    const tv = globalScope.NetutilsToolViews, facts = [];
+    if (run && run.data && typeof run.data === "object" && !Array.isArray(run.data)) {
+      Object.keys(run.data).slice(0, 8).forEach((k) => {
+        const lbl = tv ? tv.humanizeKey(k) : k.replace(/_/g, " ");
+        const txt = tv ? tv.formatValueHuman(run.data[k]) : String(run.data[k] ?? "—");
+        facts.push([lbl, txt]);
+      });
+    }
+    if (!facts.length) facts.push(["Status", run.status || "OK"], ["Target", run.target || "—"], ["Duration", state.deps.fmtMsText(outcomeDurationMs(run))]);
+    return facts;
+  }
+
+  function buildExportData(run, toolView) {
+    const checkName = state.deps.getCheckLabel(run.tool), tv = globalScope.NetutilsToolViews;
     let headers = ["Metric", "Value"], rows = [];
-    if (Array.isArray(run.whiskers) && run.whiskers.length) {
+    if (toolView && toolView.table && Array.isArray(toolView.table.headers) && toolView.table.headers.length && Array.isArray(toolView.table.rows) && toolView.table.rows.length) {
+      headers = toolView.table.headers.slice();
+      rows = toolView.table.rows.map((r) => r.map((c) => String(c ?? "—")));
+    } else if (Array.isArray(run.whiskers) && run.whiskers.length) {
       headers = ["Segment / Hop", "Min (ms)", "Avg (ms)", "Max (ms)", "Loss (%)"];
-      rows = run.whiskers.map((w) => [
-        w.label, Number(w.minMs ?? w.min ?? 0).toFixed(2), Number(w.avgMs ?? w.avg ?? 0).toFixed(2),
-        Number(w.maxMs ?? w.max ?? 0).toFixed(2), Number(w.lossPct ?? w.loss ?? 0).toFixed(1)
-      ]);
+      rows = run.whiskers.map((w) => {
+        const lp = Number(w.lossPct ?? w.loss ?? 0);
+        const fmt = (val) => (lp >= 100 || !(Number(val) > 0) ? "—" : Number(val).toFixed(2));
+        return [w.label, fmt(w.minMs ?? w.min), fmt(w.avgMs ?? w.avg), fmt(w.maxMs ?? w.max), lp.toFixed(1)];
+      });
     } else if (Array.isArray(run.waterfall) && run.waterfall.length) {
       headers = ["Phase", "Start (ms)", "Duration (ms)", "End (ms)"];
-      rows = run.waterfall.map((p) => {
-        const s = Number(p.startMs ?? 0), d = Number(p.durationMs ?? 0);
-        return [p.label, s.toFixed(2), d.toFixed(2), (s + d).toFixed(2)];
-      });
+      rows = run.waterfall.map((p) => { const s = Number(p.startMs ?? 0), d = Number(p.durationMs ?? 0); return [p.label, s.toFixed(2), d.toFixed(2), (s + d).toFixed(2)]; });
     } else if (Array.isArray(run.dns_comparisons) && run.dns_comparisons.length) {
       headers = ["Resolver", "Latency (ms)", "Answers", "Status"];
-      rows = run.dns_comparisons.map((d) => [d.resolver, d.latency_ms > 0 ? Number(d.latency_ms).toFixed(2) : "—", (d.answers || []).join(", ") || "none", d.status || "OK"]);
+      rows = run.dns_comparisons.map((d) => [d.resolver, d.latency_ms > 0 ? Number(d.latency_ms).toFixed(2) : "—", (d.answers || []).join(", ") || "None", d.status || "OK"]);
     } else if (run.tls_health) {
       const t = run.tls_health;
-      rows = [["Subject", t.subject || "—"], ["Issuer", t.issuer || "—"], ["Days Remaining", String(t.days_remaining ?? "—")], ["Protocol", t.protocol || "—"], ["Cipher", t.cipher || "—"], ["Hostname Match", String(Boolean(t.hostname_match))]];
+      rows = [["Subject", t.subject || "—"], ["Issuer", t.issuer || "—"], ["Days Remaining", String(t.days_remaining ?? "—")], ["Protocol", t.protocol || "—"], ["Cipher", t.cipher || "—"], ["Hostname Match", t.hostname_match ? "Yes" : "No"]];
+    } else if (toolView && Array.isArray(toolView.summaryFacts) && toolView.summaryFacts.length) {
+      rows = toolView.summaryFacts.map(([k, v]) => [String(k), String(v ?? "—")]);
     } else if (run.data && typeof run.data === "object") {
       Object.keys(run.data).slice(0, 16).forEach((k) => {
-        const v = run.data[k];
-        rows.push([k.replace(/_/g, " "), Array.isArray(v) ? v.map((x) => typeof x === "object" ? JSON.stringify(x) : x).join(", ") : (typeof v === "object" ? JSON.stringify(v) : String(v))]);
+        rows.push([tv ? tv.humanizeKey(k) : k.replace(/_/g, " "), tv ? tv.formatValueHuman(run.data[k]) : String(run.data[k] ?? "—")]);
       });
     }
     if (!rows.length) rows = [["Check", checkName], ["Target", run.target || "—"], ["Status", run.status || "OK"], ["Summary", run.summary || "—"]];
-    const tsv = [headers.join("\t")].concat(rows.map((r) => r.join("\t"))).join("\n");
+    const clean = (c) => String(c ?? "—").replace(/[\r\n\t]+/g, " ");
+    const tsv = [headers.join("\t")].concat(rows.map((r) => r.map(clean).join("\t"))).join("\n");
     const md = [
       "### " + checkName + " — " + (run.target || "Local"),
-      "**Status:** " + (run.status || "OK") + " | **Duration:** " + state.deps.fmtMsText(run.duration_ms),
+      "**Status:** " + (run.status || "OK") + " | **Duration:** " + state.deps.fmtMsText(outcomeDurationMs(run)),
       "", run.summary || "", "", "| " + headers.join(" | ") + " |", "| " + headers.map(() => "---").join(" | ") + " |"
-    ].concat(rows.map((r) => "| " + r.join(" | ") + " |")).join("\n");
+    ].concat(rows.map((r) => "| " + r.map(clean).join(" | ") + " |")).join("\n");
     return { headers, rows, markdown: md, tsv };
   }
 
-  function renderFactsList(dlEl, run) {
+  function renderFactsList(dlEl, facts) {
     if (!dlEl) return;
-    const facts = [];
-    if (run.data && typeof run.data === "object") {
-      Object.keys(run.data).slice(0, 8).forEach((k) => {
-        const v = run.data[k];
-        const txt = Array.isArray(v) ? v.map((x) => typeof x === "object" ? (x.port ? x.port + "/" + (x.service || "tcp") : JSON.stringify(x)) : x).join(", ") : (typeof v === "object" ? JSON.stringify(v) : String(v));
-        facts.push([k.replace(/_/g, " "), txt]);
-      });
-    }
-    if (!facts.length) facts.push(["Status", run.status || "OK"], ["Target", run.target || "—"], ["Duration", state.deps.fmtMsText(run.duration_ms)]);
+    if (!Array.isArray(facts) || !facts.length) { dlEl.replaceChildren(); dlEl.hidden = true; return; }
     const frag = document.createDocumentFragment();
     facts.forEach(([k, v]) => { const box = el("div", "fact-item"); box.append(el("dt", "", k), el("dd", "", v)); frag.appendChild(box); });
     dlEl.replaceChildren(frag);
     dlEl.hidden = false;
   }
 
-  function renderDrawerCharts(run, charts, hasW, hasF, hasD) {
-    const host = $("jobDrawerChartsHost");
-    const ch = charts || globalScope.NetutilsCharts;
-    if (ch && typeof ch.disposeHost === "function") {
-      host.querySelectorAll(".echart-host").forEach((elHost) => ch.disposeHost(elHost));
-    }
+  function ensureToolChartWrap() {
+    let wrap = $("runToolChartWrap");
+    if (wrap) return wrap;
+    const grid = $("runChartsGrid");
+    if (!grid) return null;
+    wrap = el("div", "chart-panel"); wrap.id = "runToolChartWrap"; wrap.hidden = true;
+    const title = el("h3", "chart-title"); title.id = "runToolChartTitle";
+    const chartHost = el("div", "echart-host"); chartHost.id = "runToolChartHost"; chartHost.setAttribute("role", "img");
+    const tblWrap = el("div", "va-table-scroll va-table-wrap"); tblWrap.id = "runToolTableWrap"; tblWrap.setAttribute("role", "region"); tblWrap.setAttribute("tabindex", "0");
+    wrap.append(title, chartHost, tblWrap);
+    grid.insertBefore(wrap, $("runSummaryVisual") || null);
+    return wrap;
+  }
+
+  function inspectToolVisual(run, toolView, hasW, hasF, hasD) {
+    const hasRich = hasW || hasF || hasD;
+    const hasChart = Boolean(toolView && toolView.chart && Array.isArray(toolView.chart.rows) && toolView.chart.rows.length);
+    const hasTable = Boolean(toolView && toolView.table && Array.isArray(toolView.table.rows) && toolView.table.rows.length);
+    const allowTableWithRich = Boolean(run && run.tool === "recipe_diff_http" && hasTable && toolView.table.rows.length >= 2);
+    const showChart = !hasRich && hasChart;
+    const showTable = hasTable && (!hasRich || allowTableWithRich);
+    const hasToolVisual = showChart || showTable;
+    const title = showChart ? toolView.chart.title : (allowTableWithRich ? "Endpoint Comparison" : (state.deps.getCheckLabel(run.tool) + " Details"));
+    return { showChart, showTable, hasToolVisual, title };
+  }
+
+  function renderDrawerCharts(run, charts, hasW, hasF, hasD, toolView) {
+    const host = $("jobDrawerChartsHost"), ch = charts || globalScope.NetutilsCharts;
+    if (ch && typeof ch.disposeHost === "function") host.querySelectorAll(".echart-host").forEach((elHost) => ch.disposeHost(elHost));
     host.replaceChildren();
-    if (hasW) { const b = el("div", "chart-panel"), h = el("div", "echart-host"); b.append(el("h3", "chart-title", "Path Latency & Packet Loss"), h); host.appendChild(b); if (charts) charts.renderWhiskers(h, run.whiskers); }
-    if (hasF) { const b = el("div", "chart-panel"), h = el("div", "echart-host"); b.append(el("h3", "chart-title", "Response Timing Breakdown"), h); host.appendChild(b); if (charts) charts.renderWaterfall(h, run.waterfall); }
-    if (hasD) { const b = el("div", "chart-panel"), h = el("div", "echart-host echart-host-sm"), dt = el("div", "va-table-scroll"); b.append(el("h3", "chart-title", "DNS Resolver Comparison"), h, dt); host.appendChild(b); if (charts) charts.renderDnsComparison(h, run.dns_comparisons); renderDnsTable(dt, run.dns_comparisons); }
-    if (!hasW && !hasF && !hasD && !run.tls_health) { const b = el("div", "chart-panel"), dl = el("dl", "facts-grid"); renderFactsList(dl, run); b.appendChild(dl); host.appendChild(b); }
+    if (hasW) { const b = el("div", "chart-panel"), h = el("div", "echart-host"); b.append(el("h3", "chart-title", "Path Latency & Packet Loss"), h); host.appendChild(b); if (ch) ch.renderWhiskers(h, run.whiskers); }
+    if (hasF) { const b = el("div", "chart-panel"), h = el("div", "echart-host"); b.append(el("h3", "chart-title", "Response Timing Breakdown"), h); host.appendChild(b); if (ch) ch.renderWaterfall(h, run.waterfall); }
+    if (hasD) { const b = el("div", "chart-panel"), h = el("div", "echart-host echart-host-sm"), dt = el("div", "va-table-scroll"); b.append(el("h3", "chart-title", "DNS Resolver Comparison"), h, dt); host.appendChild(b); if (ch) ch.renderDnsComparison(h, run.dns_comparisons); renderDnsTable(dt, run.dns_comparisons); }
+    const tv = inspectToolVisual(run, toolView, hasW, hasF, hasD);
+    if (tv.hasToolVisual) {
+      const b = el("div", "chart-panel");
+      b.appendChild(el("h3", "chart-title", tv.title));
+      if (tv.showChart && ch && typeof ch.renderHorizontalBars === "function") {
+        const h = el("div", "echart-host"); b.appendChild(h); ch.renderHorizontalBars(h, toolView.chart);
+      }
+      if (tv.showTable) { const tw = el("div", "va-table-scroll va-table-wrap"); b.appendChild(tw); renderStructuredTable(tw, toolView.table); }
+      host.appendChild(b);
+    }
+    const facts = toolView && toolView.summaryFacts && toolView.summaryFacts.length ? toolView.summaryFacts :
+      (!hasW && !hasF && !hasD && !run.tls_health && !tv.hasToolVisual ? buildFallbackFacts(run) : []);
+    if (facts.length) { const b = el("div", "chart-panel"), dl = el("dl", "facts-grid"); renderFactsList(dl, facts); b.appendChild(dl); host.appendChild(b); }
+  }
+
+  function renderMainToolSection(run, charts, hasW, hasF, hasD, toolView) {
+    const toolWrap = ensureToolChartWrap(), tv = inspectToolVisual(run, toolView, hasW, hasF, hasD);
+    if (toolWrap) {
+      const titleEl = $("runToolChartTitle"), chartHost = $("runToolChartHost"), tblWrap = $("runToolTableWrap");
+      toolWrap.hidden = !tv.hasToolVisual;
+      if (tv.hasToolVisual) {
+        if (titleEl) titleEl.textContent = tv.title;
+        if (chartHost) {
+          if (tv.showChart && charts && typeof charts.renderHorizontalBars === "function") { chartHost.hidden = false; charts.renderHorizontalBars(chartHost, toolView.chart); }
+          else { if (charts && typeof charts.disposeHost === "function") charts.disposeHost(chartHost); chartHost.replaceChildren(); chartHost.hidden = true; }
+        }
+        if (tblWrap) { if (tv.showTable) renderStructuredTable(tblWrap, toolView.table); else { tblWrap.replaceChildren(); tblWrap.hidden = true; } }
+      } else {
+        if (chartHost) { if (charts && typeof charts.disposeHost === "function") charts.disposeHost(chartHost); chartHost.replaceChildren(); chartHost.hidden = true; }
+        if (tblWrap) { tblWrap.replaceChildren(); tblWrap.hidden = true; }
+      }
+    }
+    const facts = toolView && toolView.summaryFacts && toolView.summaryFacts.length ? toolView.summaryFacts :
+      (!hasW && !hasF && !hasD && !run.tls_health && !tv.hasToolVisual ? buildFallbackFacts(run) : []);
+    $("runSummaryVisual").hidden = facts.length === 0;
+    if (facts.length) { $("runVisualEmptyText").hidden = true; renderFactsList($("runFactsGrid"), facts); }
+    else { renderFactsList($("runFactsGrid"), []); }
   }
 
   function renderOutcome(runData, isMainCard) {
-    const run = runData || {}, charts = globalScope.NetutilsCharts;
+    const run = runData || {}, charts = globalScope.NetutilsCharts, tvMod = globalScope.NetutilsToolViews;
+    const toolView = tvMod && typeof tvMod.buildToolView === "function" ? tvMod.buildToolView(run, state.deps) : null;
     if (isMainCard) {
       state.deps.onMainRunRendered(run);
       const st = String(run.status || "OK").toUpperCase();
       state.deps.setStatusPill($("runStatusBadge"), "[" + st + "]", state.deps.badgeVariant(st));
       $("runResultCheckName").textContent = state.deps.getCheckLabel(run.tool);
       $("runResultTarget").textContent = run.target || "Local";
-      $("runResultDuration").textContent = state.deps.fmtMsText(run.duration_ms);
+      $("runResultDuration").textContent = state.deps.fmtMsText(outcomeDurationMs(run));
       $("runResultSummary").textContent = run.summary || "Check completed.";
     }
-    if (charts) charts.renderTlsStrip($(isMainCard ? "tlsHealthStrip" : "jobDrawerTlsStrip"), run.tls_health);
+    renderTlsStrip($(isMainCard ? "tlsHealthStrip" : "jobDrawerTlsStrip"), run.tls_health);
     const hasW = Array.isArray(run.whiskers) && run.whiskers.length > 0;
     const hasF = Array.isArray(run.waterfall) && run.waterfall.length > 0;
     const hasD = Array.isArray(run.dns_comparisons) && run.dns_comparisons.length > 0;
@@ -169,14 +286,12 @@
         if (hasD) { charts.renderDnsComparison($("runDnsHost"), run.dns_comparisons); renderDnsTable($("runDnsTableWrap"), run.dns_comparisons); }
         else { charts.disposeHost($("runDnsHost")); $("runDnsTableWrap").replaceChildren(); }
       }
-      const noChart = !hasW && !hasF && !hasD && !run.tls_health;
-      $("runSummaryVisual").hidden = !noChart;
-      if (noChart) { $("runVisualEmptyText").hidden = true; renderFactsList($("runFactsGrid"), run); }
+      renderMainToolSection(run, charts, hasW, hasF, hasD, toolView);
     } else {
-      renderDrawerCharts(run, charts, hasW, hasF, hasD);
+      renderDrawerCharts(run, charts, hasW, hasF, hasD, toolView);
     }
 
-    const exp = buildExportData(run);
+    const exp = buildExportData(run, toolView);
     const thead = $(isMainCard ? "runResultTableHead" : "jobDrawerTableHead");
     const tbody = $(isMainCard ? "runResultTableBody" : "jobDrawerTableBody");
     const hr = document.createElement("tr");
@@ -190,19 +305,23 @@
   }
 
   function renderCompareDiff(pastJob, freshJob) {
-    const pAvg = Number(pastJob.duration_ms || 0), fAvg = Number(freshJob.duration_ms || 0), delta = fAvg - pAvg, badge = $("jobDrawerCompareDelta");
+    const pAvg = outcomeDurationMs(pastJob), fAvg = outcomeDurationMs(freshJob), delta = fAvg - pAvg, badge = $("jobDrawerCompareDelta");
     badge.textContent = (delta <= 0 ? "" : "+") + delta.toFixed(1) + " ms (" + (freshJob.status || "OK") + ")";
     badge.setAttribute("data-state", delta <= 0 ? "nominal" : "warn");
     const rows = [
-      ["Status", pastJob.status || "OK", freshJob.status || "OK", pastJob.status === freshJob.status ? "Unchanged" : pastJob.status + " -> " + freshJob.status],
+      ["Status", pastJob.status || "OK", freshJob.status || "OK", pastJob.status === freshJob.status ? "Unchanged" : pastJob.status + " → " + freshJob.status],
       ["Duration", state.deps.fmtMsText(pAvg), state.deps.fmtMsText(fAvg), (delta <= 0 ? "" : "+") + delta.toFixed(1) + " ms"]
     ];
     if (Array.isArray(pastJob.whiskers) && Array.isArray(freshJob.whiskers)) {
       pastJob.whiskers.forEach((pw, idx) => {
         const fw = freshJob.whiskers[idx];
         if (!fw) return;
-        const d = Number(fw.avgMs || 0) - Number(pw.avgMs || 0);
-        rows.push([pw.label, Number(pw.avgMs || 0).toFixed(2) + " ms", Number(fw.avgMs || 0).toFixed(2) + " ms", (d <= 0 ? "" : "+") + d.toFixed(2) + " ms"]);
+        const pLoss = Number(pw.lossPct ?? pw.loss ?? 0), fLoss = Number(fw.lossPct ?? fw.loss ?? 0);
+        const pVal = Number(pw.avgMs ?? pw.avg ?? 0), fVal = Number(fw.avgMs ?? fw.avg ?? 0);
+        const pMiss = pLoss >= 100 || !(pVal > 0), fMiss = fLoss >= 100 || !(fVal > 0);
+        const pTxt = pMiss ? "—" : pVal.toFixed(2) + " ms", fTxt = fMiss ? "—" : fVal.toFixed(2) + " ms";
+        const dTxt = (pMiss || fMiss) ? "—" : ((fVal - pVal <= 0 ? "" : "+") + (fVal - pVal).toFixed(2) + " ms");
+        rows.push([pw.label, pTxt, fTxt, dTxt]);
       });
     }
     state.deps.renderTableRows($("jobDrawerCompareBody"), rows, (r) => {
@@ -219,21 +338,23 @@
     if (seq !== state.drawerReqSeq || !j) return;
     state.drawerJob = j;
     $("jobDrawerTitle").textContent = state.deps.getCheckLabel(j.tool) + " — " + (j.target || "Local");
-    $("jobDrawerMeta").textContent = [j.job_id || jobId, j.status || "OK", state.deps.fmtMsText(j.duration_ms), "Recorded " + state.deps.fmtTime(j.created_at), "Retained until " + state.deps.fmtTime(j.expires_at)].join(" · ");
+    $("jobDrawerMeta").textContent = [j.job_id || jobId, j.status || "OK", state.deps.fmtMsText(outcomeDurationMs(j)), "Recorded " + state.deps.fmtTime(j.created_at), "Retained until " + state.deps.fmtTime(j.expires_at)].join(" · ");
     $("jobDrawerSummary").textContent = j.summary || "Archived check report.";
     $("jobDrawerComparePanel").hidden = true;
     $("jobDrawerRunAgainBtn").setAttribute("aria-busy", "false");
     const cb = $("jobDrawerResultCard").querySelector('[data-qe-view="chart"]');
     if (cb) cb.click();
-    renderOutcome(j, false);
     const dlg = $("jobDrawer");
-    dlg.returnValue = "";
-    if (typeof dlg.showModal === "function") {
-      if (!dlg.open) dlg.showModal();
-    } else {
-      dlg.setAttribute("open", "");
+    if (dlg) {
+      dlg.returnValue = "";
+      if (typeof dlg.showModal === "function") {
+        if (!dlg.open) dlg.showModal();
+      } else {
+        dlg.setAttribute("open", "");
+      }
     }
-    if (globalScope.NetutilsCharts) globalScope.NetutilsCharts.refreshInContainer(dlg);
+    renderOutcome(j, false);
+    if (dlg && globalScope.NetutilsCharts) globalScope.NetutilsCharts.refreshInContainer(dlg);
   }
 
   async function handleRunAgain() {
@@ -313,6 +434,7 @@
   globalScope.NetutilsResults = {
     init: init, renderOutcome: renderOutcome, openJobDrawer: openJobDrawer,
     focusTargetSection: focusTargetSection, beginRunFocus: beginRunFocus,
-    renderTableRows: renderTableRows, makeSvgBar: makeSvgBar, bindDialogDismiss: bindDialogDismiss
+    renderTableRows: renderTableRows, makeSvgBar: makeSvgBar, bindDialogDismiss: bindDialogDismiss,
+    outcomeDurationMs: outcomeDurationMs
   };
 })(typeof window !== "undefined" ? window : globalThis);

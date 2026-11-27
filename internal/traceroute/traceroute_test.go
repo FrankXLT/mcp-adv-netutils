@@ -16,6 +16,7 @@ import (
 
 	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -345,6 +346,50 @@ func TestExecutePinsResolvedIPToCommand(t *testing.T) {
 		assert.ErrorIs(t, err, security.ErrTargetDenied)
 		assert.False(t, cmdCalled)
 	})
+
+	for _, tc := range []struct {
+		name    string
+		ips     []net.IPAddr
+		wantIP  string
+		wantErr error
+	}{
+		{
+			name:   "prefers IPv4 over IPv6 when dual-stack lookup returns IPv6 first",
+			ips:    []net.IPAddr{{IP: net.ParseIP("2001:db8::1")}, {IP: net.ParseIP("198.51.100.1")}},
+			wantIP: "198.51.100.1",
+		},
+		{
+			name:    "blocks mixed valid IPv6 and metadata IPv4 before spawning command",
+			ips:     []net.IPAddr{{IP: net.ParseIP("2001:db8::1")}, {IP: net.ParseIP("169.254.169.254")}},
+			wantErr: security.ErrTargetDenied,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var capturedArg string
+			var cmdCalled bool
+			deps := execDeps{
+				lookPath: func(string) (string, error) { return "/usr/bin/traceroute", nil },
+				commandContext: func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+					cmdCalled = true
+					if len(arg) > 0 {
+						capturedArg = arg[len(arg)-1]
+					}
+					return helperCommandContext("normal")(ctx, name, arg...)
+				},
+				lookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) { return tc.ips, nil },
+				lookupAddr:   func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") },
+			}
+			res, err := executeWithDeps(context.Background(), TracerouteParams{Target: "dualstack.example"}, nil, deps)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.False(t, cmdCalled)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantIP, capturedArg)
+			assert.Equal(t, tc.wantIP, res.ResolvedIP)
+		})
+	}
 }
 
 func TestValidateAndResolveTargetNilGuardFailClosed(t *testing.T) {
@@ -421,4 +466,57 @@ func TestValidateAndResolveTargetNilGuardFailClosed(t *testing.T) {
 			assert.Empty(t, res.ResolvedIP)
 		})
 	}
+}
+
+func TestValidateAndResolveTargetGuardPrefersIPv4(t *testing.T) {
+	assert.Equal(t, "127.0.0.1", selectPreferredIP([]net.IP{net.ParseIP("::1"), net.ParseIP("127.0.0.1")}).String())
+	assert.Equal(t, "2001:db8::1", selectPreferredIP([]net.IP{net.ParseIP("2001:db8::1")}).String())
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for buf := make([]byte, 512); ; {
+			n, addr, readErr := pc.ReadFrom(buf)
+			if readErr != nil {
+				return
+			}
+			var req dns.Msg
+			if req.Unpack(buf[:n]) != nil {
+				continue
+			}
+			resp := new(dns.Msg)
+			resp.SetReply(&req)
+			for _, q := range req.Question {
+				hdr := dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 60}
+				if q.Qtype == dns.TypeAAAA {
+					resp.Answer = append(resp.Answer, &dns.AAAA{Hdr: hdr, AAAA: net.ParseIP("2001:db8::1")})
+				} else if q.Qtype == dns.TypeA {
+					resp.Answer = append(resp.Answer, &dns.A{Hdr: hdr, A: net.ParseIP("198.51.100.1")})
+				}
+			}
+			if wire, packErr := resp.Pack(); packErr == nil {
+				_, _ = pc.WriteTo(wire, addr)
+			}
+		}
+	}()
+
+	origPreferGo, origDial := net.DefaultResolver.PreferGo, net.DefaultResolver.Dial
+	net.DefaultResolver.PreferGo = true
+	net.DefaultResolver.Dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, pc.LocalAddr().String())
+	}
+	t.Cleanup(func() {
+		_ = pc.Close()
+		<-done
+		net.DefaultResolver.PreferGo, net.DefaultResolver.Dial = origPreferGo, origDial
+	})
+
+	guard, err := security.NewTargetGuard(nil, nil)
+	require.NoError(t, err)
+	target, resolvedIP, err := validateAndResolveTarget(context.Background(), "dualstack.example", guard, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "dualstack.example", target)
+	assert.Equal(t, "198.51.100.1", resolvedIP)
 }

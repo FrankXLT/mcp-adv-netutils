@@ -133,6 +133,7 @@ type Outcome struct {
 	CreatedAt      string                   `json:"created_at"`
 	ExpiresAt      string                   `json:"expires_at"`
 	DurationMS     int64                    `json:"duration_ms"`
+	ElapsedMS      float64                  `json:"elapsed_ms,omitempty"`
 	Style          string                   `json:"style"`
 	Output         string                   `json:"output"`
 	ASCII          map[string]string        `json:"ascii,omitempty"`
@@ -333,7 +334,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req Request) (*Outcome, error
 		}
 		expiresAt = now.Add(store.DefaultRetention)
 	}
-	out, err := finalizeOutcome(tool, normStyle, execRes, now, time.Since(started).Milliseconds(), jobID, expiresAt)
+	durMS, elapsedMS := measureDuration(started)
+	out, err := finalizeOutcome(tool, normStyle, execRes, now, durMS, elapsedMS, jobID, expiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -413,10 +415,10 @@ func (d *Dispatcher) checkDeadboltPolicy(ctx context.Context, tool string, req *
 		if err != nil {
 			return nil, true, err
 		}
-		durMS := time.Since(started).Milliseconds()
+		durMS, elapsedMS := measureDuration(started)
 		st := d.deadbolt.Status()
 		execRes := buildLockedCronSummaryExec(summary, durMS, &st)
-		out, err := finalizeOutcome("get_cron_status", normStyle, execRes, time.Now().UTC(), durMS, "", time.Time{})
+		out, err := finalizeOutcome("get_cron_status", normStyle, execRes, time.Now().UTC(), durMS, elapsedMS, "", time.Time{})
 		return out, true, err
 	}
 	return nil, true, ErrDeadboltLocked

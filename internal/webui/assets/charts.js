@@ -39,6 +39,16 @@
     return String(Number(n.toFixed(2)));
   }
 
+  function fmtTooltipMs(val) {
+    const n = toNum(val, 0);
+    return n >= 1000 ? (n / 1000).toFixed(2) + " s (" + Math.round(n) + " ms)" : fmtMs(n) + " ms";
+  }
+
+  function fmtCompactSpike(val) {
+    const n = toNum(val, 0);
+    return n >= 1000 ? Number((n / 1000).toFixed(1)) + "s" : Math.round(n) + "ms";
+  }
+
   function trimLabel(str, maxLen) {
     const s = String(str || "");
     if (s.length <= maxLen) return s;
@@ -55,30 +65,14 @@
 
   function readThemeTokens() {
     const cs = getComputedStyle(document.documentElement);
-    const pick = (name, fb) => {
-      const val = cs.getPropertyValue(name).trim();
-      return val || fb || "currentColor";
-    };
+    const pick = (name, fb) => cs.getPropertyValue(name).trim() || fb || "currentColor";
     return {
-      textPrimary: pick("--text-primary"),
-      textSecondary: pick("--text-secondary"),
-      textMuted: pick("--text-muted"),
-      bgSurface: pick("--bg-surface"),
-      bgElevated: pick("--bg-elevated"),
-      bgSubtle: pick("--bg-subtle"),
-      borderHairline: pick("--border-hairline"),
-      borderStrong: pick("--border-strong"),
-      accentPrimary: pick("--accent-primary"),
-      statusOk: pick("--status-ok"),
-      statusWarn: pick("--status-warn"),
-      statusDanger: pick("--status-danger"),
-      chart1: pick("--chart-1"),
-      chart2: pick("--chart-2"),
-      chart3: pick("--chart-3"),
-      chart4: pick("--chart-4"),
-      chart5: pick("--chart-5"),
-      fontSans: pick("--font-sans", "sans-serif"),
-      fontMono: pick("--font-mono", "monospace")
+      textPrimary: pick("--text-primary"), textSecondary: pick("--text-secondary"), textMuted: pick("--text-muted"),
+      bgSurface: pick("--bg-surface"), bgElevated: pick("--bg-elevated"), bgSubtle: pick("--bg-subtle"),
+      borderHairline: pick("--border-hairline"), borderStrong: pick("--border-strong"), accentPrimary: pick("--accent-primary"),
+      statusOk: pick("--status-ok"), statusWarn: pick("--status-warn"), statusDanger: pick("--status-danger"),
+      chart1: pick("--chart-1"), chart2: pick("--chart-2"), chart3: pick("--chart-3"), chart4: pick("--chart-4"), chart5: pick("--chart-5"),
+      fontSans: pick("--font-sans", "sans-serif"), fontMono: pick("--font-mono", "monospace")
     };
   }
 
@@ -147,23 +141,17 @@
   function mountChart(hostEl, buildOptionFn, emptyMsg) {
     if (!hostEl) return null;
     disposeHost(hostEl);
+    const showEmpty = (msg) => {
+      const p = document.createElement("p");
+      p.className = "chart-empty";
+      p.textContent = msg;
+      hostEl.replaceChildren(p);
+      return null;
+    };
     const tok = readThemeTokens();
     const opt = buildOptionFn(tok, hostEl);
-    if (!opt) {
-      hostEl.removeAttribute("data-rows");
-      const p = document.createElement("p");
-      p.className = "chart-empty";
-      p.textContent = emptyMsg || "No chart data available.";
-      hostEl.replaceChildren(p);
-      return null;
-    }
-    if (!globalScope.echarts || typeof globalScope.echarts.init !== "function") {
-      const p = document.createElement("p");
-      p.className = "chart-empty";
-      p.textContent = "Chart engine unavailable.";
-      hostEl.replaceChildren(p);
-      return null;
-    }
+    if (!opt) { hostEl.removeAttribute("data-rows"); return showEmpty(emptyMsg || "No chart data available."); }
+    if (!globalScope.echarts || typeof globalScope.echarts.init !== "function") return showEmpty("Chart engine unavailable.");
     hostEl.replaceChildren();
     const chart = globalScope.echarts.init(hostEl, null, { renderer: "svg" });
     chart.setOption(opt, true);
@@ -173,13 +161,7 @@
   }
 
   function tooltipStyle(tok) {
-    return {
-      backgroundColor: tok.bgElevated,
-      borderColor: tok.borderStrong,
-      borderWidth: 1,
-      textStyle: { color: tok.textPrimary, fontFamily: tok.fontSans, fontSize: 12 },
-      confine: true
-    };
+    return { backgroundColor: tok.bgElevated, borderColor: tok.borderStrong, borderWidth: 1, textStyle: { color: tok.textPrimary, fontFamily: tok.fontSans, fontSize: 12 }, confine: true };
   }
 
   function normalizeWhiskers(rawSeries) {
@@ -356,33 +338,103 @@
     }, "No resolver comparison data available.");
   }
 
-  function renderHistoryTimeline(hostEl, rawBuckets) {
-    const rows = (Array.isArray(rawBuckets) ? rawBuckets : []).filter((b) => b && typeof b === "object").map((b) => ({
-      label: String(b.label || b.ts || ""),
-      avg: Math.max(0, toNum(b.avg_ms, 0)),
-      max: Math.max(0, toNum(b.max_ms, 0)),
-      ok: toNum(b.ok_count, 0), warn: toNum(b.warn_count, 0), fail: toNum(b.fail_count, 0),
-      uptime: toNum(b.uptime_pct, 100),
-      status: String(b.status || "OK").toUpperCase()
+  function renderHorizontalBars(hostEl, spec) {
+    const cfg = spec && typeof spec === "object" ? spec : {};
+    const rows = (Array.isArray(cfg.rows) ? cfg.rows : []).filter((r) => r && typeof r === "object").map((r, i) => ({
+      label: String(r.label || ("Item " + (i + 1))),
+      value: Math.max(0, toNum(r.value, 0)),
+      valueText: r.valueText != null ? String(r.valueText) : "",
+      tone: String(r.tone || "").toLowerCase(),
+      tooltipLines: Array.isArray(r.tooltipLines) ? r.tooltipLines.map((x) => String(x)) : []
     }));
+    if (hostEl) hostEl.dataset.rows = rows.length > 6 ? "many" : "few";
     return mountChart(hostEl, (tok, el) => {
       if (!rows.length) return null;
-      const scale = computeNiceMax(Math.max.apply(null, rows.map((r) => Math.max(r.avg, r.max)).concat([1])));
-      const cw = el.clientWidth || 640;
+      const narrow = (el.clientWidth || 640) < 460;
+      const toneMap = { ok: tok.statusOk, warn: tok.statusWarn, fault: tok.statusDanger, chart2: tok.chart2, info: tok.chart2, muted: tok.textMuted };
+      const cats = rows.map((r) => trimLabel(r.label, narrow ? 18 : 24));
+      const maxVal = Math.max.apply(null, rows.map((r) => r.value).concat([1]));
+      const maxLbl = rows.reduce((m, r) => Math.max(m, (r.valueText || fmtMs(r.value)).length), 0);
+      const rightPad = narrow ? 72 : Math.min(132, Math.max(84, maxLbl * 7 + 16));
+      return horizontalChartBase(tok, el, cats, maxVal, cfg.xName || "ms", rightPad, 42, (params) => {
+        const first = Array.isArray(params) ? params[0] : params;
+        const r = rows[first ? first.dataIndex : 0];
+        if (!r) return "";
+        return r.tooltipLines.length
+          ? r.tooltipLines.map((line, idx) => (idx === 0 ? "<strong>" + escHtml(line) + "</strong>" : escHtml(line))).join("<br/>")
+          : "<strong>" + escHtml(r.label) + "</strong><br/>" + escHtml(r.valueText || fmtMs(r.value));
+      }, [{
+        name: cfg.xName || "Value", type: "bar", barMaxWidth: 18,
+        label: {
+          show: true, position: "right", fontFamily: tok.fontMono, fontSize: 11, color: tok.textSecondary, textBorderColor: tok.bgElevated, textBorderWidth: 4,
+          formatter: (p) => { const r = rows[p.dataIndex]; return r ? (r.valueText || fmtMs(r.value)) : ""; }
+        },
+        data: rows.map((r) => ({ value: r.value, itemStyle: { color: toneMap[r.tone] || tok.accentPrimary, borderRadius: [3, 3, 3, 3] } }))
+      }]);
+    }, cfg.emptyMsg || "No chart data available.");
+  }
+
+  function computeTimelineScale(rows) {
+    const nonNegAvg = rows.filter((r) => r.avg >= 0).map((r) => r.avg);
+    const nonNegMax = rows.filter((r) => r.max >= 0).map((r) => r.max);
+    const sorted = (nonNegAvg.length ? nonNegAvg : nonNegMax).slice().sort((a, b) => a - b);
+    const qIdx = sorted.length <= 4 ? Math.floor((sorted.length - 1) * 0.5) : (sorted.length <= 10 ? Math.floor((sorted.length - 1) * 0.75) : Math.floor((sorted.length - 1) * 0.9));
+    const pTyp = sorted.length ? sorted[qIdx] : 0;
+    const typicalHigh = Math.max(10, pTyp || 10);
+    const globalMax = Math.max.apply(null, rows.map((r) => Math.max(r.avg, r.max)).concat([1]));
+    const isOutlierScaled = globalMax > Math.max(250, typicalHigh * 4);
+    const scale = isOutlierScaled ? computeNiceMax(Math.max(typicalHigh * 1.6, 50)) : computeNiceMax(globalMax);
+    return { scale, isOutlierScaled };
+  }
+
+  function renderHistoryTimeline(hostEl, rawBuckets) {
+    const rows = (Array.isArray(rawBuckets) ? rawBuckets : []).filter((b) => b && typeof b === "object").map((b) => ({
+      label: String(b.label || b.ts || ""), avg: Math.max(0, toNum(b.avg_ms, 0)), max: Math.max(0, toNum(b.max_ms, 0)),
+      ok: toNum(b.ok_count, 0), warn: toNum(b.warn_count, 0), fail: toNum(b.fail_count, 0),
+      uptime: toNum(b.uptime_pct, 100), status: String(b.status || "OK").toUpperCase()
+    }));
+    if (hostEl) hostEl.dataset.scaleNote = "";
+    return mountChart(hostEl, (tok, el) => {
+      if (!rows.length) { el.dataset.scaleNote = ""; return null; }
+      const { scale, isOutlierScaled } = computeTimelineScale(rows);
+      const cw = el.clientWidth || 640, narrow = cw < 460;
       const step = rows.length > 10 ? Math.max(1, Math.ceil(rows.length / (cw < 560 ? 5 : 10))) : 0;
-      const eventPoints = [];
+      const eventPoints = [], spikePoints = [];
+      let clippedCount = 0;
       for (let i = 0; i < rows.length; i += 1) {
-        const r = rows[i];
-        if (r.fail > 0 || r.warn > 0 || r.status !== "OK") {
-          eventPoints.push({
-            value: [i, Math.max(r.avg, r.max)],
-            itemStyle: { color: r.fail > 0 || r.status === "FAIL" ? tok.statusDanger : tok.statusWarn, borderColor: tok.bgSurface, borderWidth: 1.5 }
+        const r = rows[i], rawPeak = Math.max(r.avg, r.max);
+        const isClipped = isOutlierScaled && (r.max > scale.max || r.avg > scale.max);
+        const ptColor = r.fail > 0 || r.status === "FAIL" ? tok.statusDanger : tok.statusWarn;
+        if (isClipped) {
+          clippedCount += 1;
+          spikePoints.push({
+            value: [i, scale.max], rawPeak: rawPeak, itemStyle: { color: ptColor, borderColor: tok.bgSurface, borderWidth: 1.5 },
+            label: i === 0 ? { align: "left", color: ptColor } : (i === rows.length - 1 ? { align: "right", color: ptColor } : { color: ptColor })
           });
+        } else if (r.fail > 0 || r.warn > 0 || r.status !== "OK") {
+          eventPoints.push({ value: [i, Math.min(rawPeak, scale.max)], itemStyle: { color: ptColor, borderColor: tok.bgSurface, borderWidth: 1.5 } });
         }
       }
+      el.dataset.scaleNote = (isOutlierScaled && clippedCount > 0)
+        ? ("Capped Y-axis at " + scale.max + " ms (" + clippedCount + " extreme spike" + (clippedCount === 1 ? "" : "s") + " clipped — hover for exact ms)") : "";
+      const legendData = ["Average (ms)", "Peak (ms)", "Warn / Fail"];
+      const series = [
+        { name: "Peak (ms)", type: "line", symbol: "none", lineStyle: { color: tok.chart4, width: 1.5, type: "dashed" }, itemStyle: { color: tok.chart4 }, data: rows.map((r) => (isOutlierScaled ? Math.min(r.max, scale.max) : r.max)) },
+        { name: "Average (ms)", type: "line", symbol: "circle", symbolSize: 5, lineStyle: { color: tok.accentPrimary, width: 2.2 }, itemStyle: { color: tok.accentPrimary }, areaStyle: { color: tok.accentPrimary, opacity: 0.1 }, data: rows.map((r) => (isOutlierScaled ? Math.min(r.avg, scale.max) : r.avg)) },
+        { name: "Warn / Fail", type: "scatter", symbol: "diamond", symbolSize: 11, z: 5, itemStyle: { color: tok.statusWarn, borderColor: tok.bgSurface, borderWidth: 1.5 }, data: eventPoints }
+      ];
+      if (spikePoints.length) {
+        legendData.push("Spike (clipped)");
+        series.push({
+          name: "Spike (clipped)", type: "scatter", symbol: "triangle", symbolSize: 10, z: 6,
+          itemStyle: { color: tok.statusDanger, borderColor: tok.bgSurface, borderWidth: 1.5 },
+          label: { show: true, position: "top", distance: 4, fontFamily: tok.fontMono, fontSize: 10, color: tok.statusDanger, textBorderColor: tok.bgElevated, textBorderWidth: 3, formatter: (p) => (spikePoints[p.dataIndex] ? fmtCompactSpike(spikePoints[p.dataIndex].rawPeak) + " ↑" : "") },
+          labelLayout: { hideOverlap: true }, data: spikePoints
+        });
+      }
+      const leftPad = Math.max(52, String(scale.max).length * 7 + 18);
       return {
-        animation: false, backgroundColor: "transparent",
-        textStyle: { fontFamily: tok.fontSans, color: tok.textPrimary },
+        animation: false, backgroundColor: "transparent", textStyle: { fontFamily: tok.fontSans, color: tok.textPrimary },
         tooltip: Object.assign(tooltipStyle(tok), {
           trigger: "axis",
           formatter: (params) => {
@@ -390,29 +442,25 @@
             const r = rows[first ? first.dataIndex : 0];
             return r ? [
               "<strong>" + escHtml(r.label) + "</strong> (" + escHtml(r.status) + ")",
-              "Average: " + escHtml(fmtMs(r.avg)) + " ms · Peak: " + escHtml(fmtMs(r.max)) + " ms",
+              "Average: " + escHtml(fmtTooltipMs(r.avg)) + " · Peak: " + escHtml(fmtTooltipMs(r.max)),
               "Uptime: " + escHtml(fmtMs(r.uptime)) + "% (" + escHtml(r.ok) + " OK / " + escHtml(r.warn) + " Warn / " + escHtml(r.fail) + " Fail)"
             ].join("<br/>") : "";
           }
         }),
-        legend: { bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, textStyle: { color: tok.textSecondary, fontSize: 11 }, data: ["Average (ms)", "Peak (ms)", "Warn / Fail"] },
-        grid: { left: 52, right: 18, top: 28, bottom: 52, containLabel: false },
+        legend: { bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: narrow ? 8 : 12, textStyle: { color: tok.textSecondary, fontSize: 11 }, data: legendData },
+        grid: { left: leftPad, right: spikePoints.length ? 26 : 18, top: spikePoints.length ? 36 : 28, bottom: narrow && spikePoints.length ? 62 : 52, containLabel: false },
         xAxis: {
-          type: "category", data: rows.map((r) => r.label), boundaryGap: false,
-          axisLine: { lineStyle: { color: tok.borderStrong } },
+          type: "category", data: rows.map((r) => r.label), boundaryGap: false, axisLine: { lineStyle: { color: tok.borderStrong } },
           axisLabel: { color: tok.textSecondary, fontSize: 11, interval: step > 0 ? (idx) => idx % step === 0 || idx === rows.length - 1 : 0, hideOverlap: true }
         },
         yAxis: {
-          type: "value", name: "ms", nameGap: 10, min: 0, max: scale.max,
+          type: "value", name: "ms", nameGap: spikePoints.length ? 12 : 10, min: 0, max: scale.max,
+          nameTextStyle: { align: "right", color: tok.textMuted, fontSize: 11, fontFamily: tok.fontMono },
           axisLine: { lineStyle: { color: tok.borderStrong } },
           axisLabel: { color: tok.textSecondary, fontSize: 11, fontFamily: tok.fontMono },
           splitLine: { lineStyle: { color: tok.borderHairline, type: "dashed" } }
         },
-        series: [
-          { name: "Peak (ms)", type: "line", symbol: "none", lineStyle: { color: tok.chart4, width: 1.5, type: "dashed" }, itemStyle: { color: tok.chart4 }, data: rows.map((r) => r.max) },
-          { name: "Average (ms)", type: "line", symbol: "circle", symbolSize: 5, lineStyle: { color: tok.accentPrimary, width: 2.2 }, itemStyle: { color: tok.accentPrimary }, areaStyle: { color: tok.accentPrimary, opacity: 0.1 }, data: rows.map((r) => r.avg) },
-          { name: "Warn / Fail", type: "scatter", symbol: "diamond", symbolSize: 11, z: 5, itemStyle: { color: tok.statusWarn, borderColor: tok.bgSurface, borderWidth: 1.5 }, data: eventPoints }
-        ]
+        series: series
       };
     }, "No check history recorded in this window yet.");
   }
@@ -420,8 +468,7 @@
   function rethemeAll() {
     const entries = Array.from(REGISTRY.entries());
     for (let i = 0; i < entries.length; i += 1) {
-      const hostEl = entries[i][0];
-      const entry = entries[i][1];
+      const hostEl = entries[i][0], entry = entries[i][1];
       if (!document.contains(hostEl)) disposeHost(hostEl);
       else mountChart(hostEl, entry.buildOption);
     }
@@ -440,44 +487,14 @@
   }
 
   if (typeof MutationObserver === "function") {
-    themeObserver = new MutationObserver((mutations) => {
-      for (let i = 0; i < mutations.length; i += 1) {
-        if (mutations[i].attributeName === "data-theme") {
-          rethemeAll();
-          break;
-        }
-      }
+    themeObserver = new MutationObserver((muts) => {
+      if (muts.some((m) => m.attributeName === "data-theme")) rethemeAll();
     });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   }
 
-  function renderTlsStrip(stripEl, tls) {
-    if (!stripEl) return;
-    if (!tls || typeof tls !== "object") { stripEl.hidden = true; stripEl.replaceChildren(); return; }
-    const days = Number(tls.days_remaining ?? 0), valid = Boolean(tls.valid) && Boolean(tls.hostname_match);
-    const tone = !valid || days <= 7 ? "fault" : days < 30 ? "warn" : "nominal";
-    const pill = document.createElement("span");
-    pill.className = "va-pill";
-    pill.textContent = (valid ? "TLS Valid" : "TLS Attention") + " · " + days + "d left";
-    pill.setAttribute("data-variant", "status");
-    pill.setAttribute("data-state", tone);
-    const addMeta = (k, v) => {
-      const wrap = document.createElement("span"), strong = document.createElement("strong");
-      wrap.className = "tls-meta-item";
-      strong.textContent = k + ": ";
-      wrap.append(strong, document.createTextNode(String(v || "—")));
-      return wrap;
-    };
-    const kids = [pill, addMeta("Host", tls.subject), addMeta("Issuer", tls.issuer)];
-    if (tls.protocol || tls.cipher) kids.push(addMeta("Protocol", [tls.protocol, tls.cipher].filter(Boolean).join(" ")));
-    if (tls.not_after) kids.push(addMeta("Expires", String(tls.not_after).replace("T", " ").slice(0, 16) + "Z"));
-    kids.push(addMeta("Name Match", tls.hostname_match ? "Verified" : "Mismatch"));
-    stripEl.replaceChildren.apply(stripEl, kids);
-    stripEl.hidden = false;
-  }
-
   globalScope.NetutilsCharts = {
-    renderWhiskers, renderWaterfall, renderDnsComparison, renderHistoryTimeline,
-    renderTlsStrip, disposeHost, rethemeAll, refreshInContainer, fmtMs
+    renderWhiskers, renderWaterfall, renderDnsComparison, renderHorizontalBars,
+    renderHistoryTimeline, disposeHost, rethemeAll, refreshInContainer, fmtMs
   };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -174,7 +174,7 @@ func extractTLSHealth(res *tls.CheckResult) *TLSHealthView {
 	if len(res.PeerCertificates) > 0 {
 		leaf := &res.PeerCertificates[0]
 		view.Subject = leaf.Subject
-		view.Issuer = leaf.Issuer
+		view.Issuer = formatCertIssuer(leaf.Issuer)
 		view.DaysRemaining = leaf.ExpiresInDays
 		if !leaf.NotAfter.IsZero() {
 			view.NotAfter = leaf.NotAfter.UTC().Format(time.RFC3339)
@@ -199,12 +199,49 @@ func extractDiffHTTPTLSHealth(endpoints []recipes.DiffHTTPEndpoint) *TLSHealthVi
 		}
 		return &TLSHealthView{
 			Valid:         valid,
-			Subject:       extractHostFromURL(ep.URL),
+			Subject:       firstNonEmpty(extractHostFromURL(ep.URL), formatCertIssuer(ep.Subject)),
+			Issuer:        formatCertIssuer(ep.Issuer),
+			Protocol:      ep.TLSVersion,
+			Cipher:        ep.CipherSuite,
 			DaysRemaining: days,
+			NotAfter:      ep.NotAfter,
 			HostnameMatch: valid,
 		}
 	}
 	return nil
+}
+
+func formatCertIssuer(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	var org, cn string
+	for i, start, esc := 0, 0, false; i <= len(trimmed); i++ {
+		if i < len(trimmed) {
+			if esc {
+				esc = false
+				continue
+			}
+			if esc = trimmed[i] == '\\'; esc || trimmed[i] != ',' {
+				continue
+			}
+		}
+		if k, v, ok := strings.Cut(strings.ReplaceAll(trimmed[start:i], `\,`, `,`), "="); ok {
+			val := strings.TrimSpace(v)
+			switch strings.ToUpper(strings.TrimSpace(k)) {
+			case "O":
+				org = firstNonEmpty(org, val)
+			case "CN":
+				cn = firstNonEmpty(cn, val)
+			}
+		}
+		start = i + 1
+	}
+	if org != "" && cn != "" && !strings.EqualFold(org, cn) {
+		return org + " (" + cn + ")"
+	}
+	return firstNonEmpty(org, cn, trimmed)
 }
 
 func extractHostFromURL(rawURL string) string {
@@ -297,7 +334,7 @@ func extractLANInventory(data *recipes.LANRadarData, now time.Time) *LANInventor
 	virt := make([]LANHostView, 0, len(data.VirtualLAA))
 	for i := range data.VirtualLAA {
 		n := &data.VirtualLAA[i]
-		virt = append(virt, LANHostView{IP: n.IP, Hostname: n.Hostname, MAC: n.MAC, Vendor: n.Vendor, Runtime: "LAA / Virtual", Segment: "laa"})
+		virt = append(virt, LANHostView{IP: n.IP, Hostname: n.Hostname, MAC: n.MAC, Vendor: n.Vendor, Runtime: "Virtual MAC (Docker / VM)", Segment: "laa"})
 	}
 	return &LANInventoryView{CapturedAt: now.UTC().Format(time.RFC3339), Physical: phys, Virtual: virt}
 }

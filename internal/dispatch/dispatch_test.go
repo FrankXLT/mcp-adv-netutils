@@ -483,3 +483,54 @@ func TestManageSavedDestinationsLifecycleAndGuard(t *testing.T) {
 	_, err = d.ManageSavedDestinations(ctx, DestinationParams{Action: "delete", ID: id})
 	require.ErrorIs(t, err, store.ErrNotFound)
 }
+
+func TestDurationAndElapsedMSRoundTrip(t *testing.T) {
+	t.Parallel()
+	durZero, elapsedZero := measureDuration(time.Time{})
+	assert.Equal(t, int64(0), durZero)
+	assert.Zero(t, elapsedZero)
+
+	durSub, elapsedSub := measureDuration(time.Now().Add(-150 * time.Microsecond))
+	assert.Equal(t, int64(1), durSub)
+	assert.GreaterOrEqual(t, elapsedSub, 0.15)
+
+	durTiny, elapsedTiny := measureDuration(time.Now().Add(-100 * time.Nanosecond))
+	assert.Equal(t, int64(1), durTiny)
+	assert.GreaterOrEqual(t, elapsedTiny, 0.01)
+
+	ctx, st := context.Background(), openTestStore(t)
+	d, err := New(Config{Store: st})
+	require.NoError(t, err)
+
+	macOut, err := d.Dispatch(ctx, Request{Tool: "mac_vendor_lookup", Args: map[string]any{"target": "02:42:ac:11:00:02"}})
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, macOut.DurationMS, int64(1))
+	assert.Greater(t, macOut.ElapsedMS, 0.0)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	lanCtx := transport.WithDoorway(ctx, transport.DoorwayLAN)
+	httpOut, err := d.Dispatch(lanCtx, Request{Tool: "http_ping", Args: map[string]any{"target": srv.URL}})
+	require.NoError(t, err)
+	assert.Equal(t, "OK", httpOut.Status)
+	assert.GreaterOrEqual(t, httpOut.DurationMS, int64(1))
+	assert.Greater(t, httpOut.ElapsedMS, 0.0)
+
+	for _, orig := range []*Outcome{macOut, httpOut} {
+		rep, repErr := d.GetJobReport(ctx, orig.JobID, ascii.StyleDefault)
+		require.NoError(t, repErr)
+		assert.GreaterOrEqual(t, rep.DurationMS, int64(1))
+		assert.Greater(t, rep.ElapsedMS, 0.0)
+		assert.InDelta(t, orig.ElapsedMS, rep.ElapsedMS, 0.0001)
+	}
+
+	fallbackOut, err := outcomeFromJobRecord(&store.JobRecord{
+		JobID: "job_legacy_ms", ToolName: "ping", Target: "127.0.0.1", Status: "OK", DurationMS: 7,
+	}, ascii.StyleDefault)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), fallbackOut.DurationMS)
+	assert.Equal(t, 7.0, fallbackOut.ElapsedMS)
+}

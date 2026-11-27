@@ -4,12 +4,12 @@
   const THEME_KEY = "netutils_theme", DENSITY_KEY = "netutils_density";
   const THEMES = { white: 1, paper: 1, dark: 1, "dark-paper": 1 };
   const CHECKS = {
-    recipe_diff_ping: { goal: "path", label: "Multi-Point Ping", groupLabel: "Path & Ping", placeholder: "canary.example.net", hint: "Compare latency from local adapter, gateway, ISP, and destination." },
-    ping: { goal: "path", label: "Standard Ping", groupLabel: "Path & Ping", placeholder: "canary.example.net", hint: "Measure round-trip latency and packet loss to one target." },
+    recipe_diff_ping: { goal: "path", label: "Multi-Point Ping", groupLabel: "Path & Ping", placeholder: "1.1.1.1", hint: "Compare latency from local adapter, gateway, ISP, and destination." },
+    ping: { goal: "path", label: "Standard Ping", groupLabel: "Path & Ping", placeholder: "1.1.1.1", hint: "Measure round-trip latency and packet loss to one target." },
     recipe_path_autopsy: { goal: "path", label: "Full Path Autopsy", groupLabel: "Path & Ping", placeholder: "198.51.100.44", hint: "Trace hops, packet loss, jitter, and path packet size limit." },
     mtr_path_quality: { goal: "path", label: "Hop-by-Hop Latency & Loss", groupLabel: "Path & Ping", placeholder: "198.51.100.44", hint: "Measure packet loss and latency spikes at each hop." },
     traceroute: { goal: "path", label: "Network Route Trace", groupLabel: "Path & Ping", placeholder: "203.0.113.8", hint: "Show every router hop along the path." },
-    mtu_path_probe: { goal: "path", label: "Path Packet Size Limit", groupLabel: "Path & Ping", placeholder: "canary.example.net", hint: "Find largest packet size supported without fragmentation." },
+    mtu_path_probe: { goal: "path", label: "Path Packet Size Limit", groupLabel: "Path & Ping", placeholder: "1.1.1.1", hint: "Find largest packet size supported without fragmentation." },
     recipe_diff_http: { goal: "web", label: "Website & TLS Health Check", groupLabel: "Web & DNS", placeholder: "https://api.example.com/health", hint: "Measure page timing phases and verify TLS certificate health." },
     http_ping: { goal: "web", label: "Website Timing Breakdown", groupLabel: "Web & DNS", placeholder: "https://api.example.com/health", hint: "Time DNS lookup, TCP connect, TLS handshake, and first byte." },
     tls_certificate_check: { goal: "web", label: "TLS Certificate & Expiry", groupLabel: "Web & DNS", placeholder: "api.example.com", hint: "Inspect certificate chain, issuer, cipher, and days remaining." },
@@ -34,14 +34,14 @@
   };
 
   const state = {
-    mode: "locked", deadboltEnabled: true, activeTab: "checks", goalFilter: "path", lanSegment: "all", historyRange: "30d",
-    demoSnapshot: null, demoJobsById: {}, lastRun: null, destinationsLoaded: false, liveJobSeq: 0,
+    mode: "locked", deadboltEnabled: true, activeTab: "checks", goalFilter: "path", lanSegment: "all", historyRange: "30d", userSelectedRange: false,
+    demoSnapshot: null, demoJobsById: {}, lastRun: null, destinationsLoaded: false, liveJobSeq: 0, wsReqSeq: 0,
     lanData: { physical: [], virtual: [] }, snapshotDiff: null, savedBaseline: null, lastSummary: null
   };
 
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined && text !== null) n.textContent = String(text); return n; };
-  const getCheckMeta = (id) => CHECKS[id] || { goal: "path", label: id || "Check", placeholder: "canary.example.net", hint: "Enter a host, IP, or URL." };
+  const getCheckMeta = (id) => CHECKS[id] || { goal: "path", label: id || "Check", placeholder: "1.1.1.1", hint: "Enter a host, IP, or URL." };
   const getCheckLabel = (id) => getCheckMeta(id).label;
   const announce = (msg) => { const l = $("a11yAnnouncer"); if (l && msg) { l.textContent = ""; globalScope.setTimeout(() => { l.textContent = String(msg); }, 20); } };
   const storeVal = (s, k, v) => { try { if (v === undefined) return s.getItem(k) || ""; if (v) s.setItem(k, v); else s.removeItem(k); } catch (_) {} return ""; };
@@ -49,13 +49,7 @@
   const setStatusPill = (p, txt, st) => { if (!p) return; const u = String(txt || "IDLE").toUpperCase(); p.textContent = u; p.setAttribute("data-variant", "status"); p.setAttribute("data-state", st || badgeVariant(u)); };
   const fmtTime = (iso) => { const ms = iso ? Date.parse(iso) : NaN; return Number.isFinite(ms) ? new Date(ms).toISOString().replace("T", " ").slice(0, 16) + "Z" : (iso || "—"); };
   const fmtMsText = (ms) => { const n = Number(ms); return !Number.isFinite(n) ? "—" : n >= 1000 ? (n / 1000).toFixed(2) + " s" : (n >= 10 ? n.toFixed(1) : n.toFixed(2)) + " ms"; };
-  const syncValidity = (inp, msg) => {
-    if (!inp) return true;
-    const err = inp.getAttribute("data-error") ? $(inp.getAttribute("data-error")) : null;
-    inp.setCustomValidity(msg || ""); inp.setAttribute("aria-invalid", msg ? "true" : "false");
-    if (err) err.textContent = msg || "";
-    return !msg;
-  };
+  const syncValidity = (inp, msg) => { if (!inp) return true; const err = inp.getAttribute("data-error") ? $(inp.getAttribute("data-error")) : null; inp.setCustomValidity(msg || ""); inp.setAttribute("aria-invalid", msg ? "true" : "false"); if (err) err.textContent = msg || ""; return !msg; };
   const wireRequired = (inp, msg) => { if (!inp) return; inp.addEventListener("input", () => { if (!inp.required || inp.value.trim()) syncValidity(inp, ""); }); inp.addEventListener("blur", () => { if (inp.required && !inp.value.trim()) syncValidity(inp, msg); }); };
   const wireSegmented = (id, attr, fn) => {
     const g = $(id); if (!g) return;
@@ -114,39 +108,38 @@
   }
   function setStudioModeUI(mode, deadboltEnabled) {
     state.mode = mode; state.deadboltEnabled = Boolean(deadboltEnabled);
-    if (mode === "locked") { state.destinationsLoaded = false; state.lastRun = null; state.liveJobSeq += 1; }
+    if (mode === "locked") { state.destinationsLoaded = false; state.lastRun = null; state.liveJobSeq += 1; state.wsReqSeq += 1; }
     if (globalScope.NetutilsDestinations) globalScope.NetutilsDestinations.setMode(mode);
     $("lockGateSection").hidden = mode !== "locked"; $("studioMain").hidden = mode === "locked"; $("demoBanner").hidden = mode !== "demo";
+    if ($("mobileNavDock")) $("mobileNavDock").hidden = mode === "locked";
+    const nav = document.querySelector(".topbar-tabs-nav"); if (nav) nav.hidden = mode === "locked";
     const cfg = mode === "demo" ? ["DEMO", "warn", "Live Mode", "live"] : mode === "locked" ? ["LOCKED", "fault", "Demo", "demo"] :
       state.deadboltEnabled ? ["UNLOCKED", "ok", "Lock", "lock"] : ["OPEN", "ok", "Demo", "demo"];
     setStatusPill($("deadboltPill"), cfg[0], cfg[1]);
     $("lockModeBtn").textContent = cfg[2]; $("lockModeBtn").setAttribute("data-action", cfg[3]);
   }
-  function enterLockedMode(msg) { setStudioModeUI("locked", true); syncValidity($("passphraseInput"), msg || ""); announce(msg || "Network studio locked."); }
+  function enterLockedMode(msg) {
+    setStudioModeUI("locked", true);
+    if (!msg) { const form = $("unlockForm"); if (form) form.reset(); }
+    syncValidity($("passphraseInput"), msg || ""); announce(msg || "Network studio locked.");
+  }
 
   function renderSummary(summary) {
-    const s = summary || state.lastSummary || {};
-    state.lastSummary = s;
-    const totalTargets = Number(s.total_targets ?? 0);
-    const hasSched = s.cron_health_pct !== null && s.cron_health_pct !== undefined && totalTargets > 0;
+    const s = summary || state.lastSummary || {}; state.lastSummary = s;
+    const totalTargets = Number(s.total_targets ?? 0), hasSched = s.cron_health_pct !== null && s.cron_health_pct !== undefined && totalTargets > 0;
     const pct = Number(s.cron_health_pct), clamped = hasSched && Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 0;
     $("kpiUptimeVal").textContent = hasSched ? clamped.toFixed(1) + "%" : "—";
     $("kpiUptimeProgress").setAttribute("aria-valuenow", String(Math.round(clamped)));
     $("kpiUptimeBar").setAttribute("width", String(clamped));
-    const card = $("kpiUptimeCard");
-    if (card) { if (hasSched) card.setAttribute("data-state", clamped >= 95 ? "ok" : clamped >= 80 ? "warn" : "fault"); else card.removeAttribute("data-state"); }
+    const card = $("kpiUptimeCard"); if (card) { if (hasSched) card.setAttribute("data-state", clamped >= 95 ? "ok" : clamped >= 80 ? "warn" : "fault"); else card.removeAttribute("data-state"); }
     $("kpiUptimeMeta").textContent = hasSched ? ((s.healthy_targets ?? 0) + " / " + totalTargets + " checks healthy") : "No scheduled checks yet";
-
     const alerts = Number(s.active_alerts ?? 0);
     $("kpiProblemsVal").textContent = String(alerts);
     $("kpiProblemsMeta").textContent = alerts > 0 ? "Targets needing attention" : "All targets healthy";
-
     const dests = globalScope.NetutilsDestinations ? globalScope.NetutilsDestinations.getDestinations() : [];
     const destCount = state.destinationsLoaded ? dests.length : Number(s.saved_destinations ?? 0);
     $("kpiDestinationsVal").textContent = String(destCount);
-    $("kpiDestinationsMeta").textContent = state.destinationsLoaded
-      ? (dests.filter((d) => d.pinned).length + " pinned · " + dests.filter((d) => d.monitor_enabled).length + " monitored")
-      : "Saved check targets";
+    $("kpiDestinationsMeta").textContent = state.destinationsLoaded ? (dests.filter((d) => d.pinned).length + " pinned · " + dests.filter((d) => d.monitor_enabled).length + " monitored") : "Saved check targets";
     const usedMb = Number(s.archive_mb), maxMb = Number(s.archive_max_mb || 256), jobCount = Number(s.retained_jobs ?? 0);
     $("kpiHistorySizeVal").textContent = Number.isFinite(usedMb) ? usedMb.toFixed(1) + " MB of " + Math.round(maxMb) + " MB" : "—";
     $("kpiHistorySizeMeta").textContent = jobCount + (jobCount === 1 ? " saved run (30d limit)" : " saved runs (30d limit)");
@@ -154,13 +147,7 @@
 
   const renderTableRows = (tbodyEl, items, rowSpec) => globalScope.NetutilsResults.renderTableRows(tbodyEl, items, rowSpec);
   const makeSvgBar = (rttMs) => globalScope.NetutilsResults.makeSvgBar(rttMs);
-
-  function isHostChanged(host) {
-    const d = state.snapshotDiff;
-    if (!d) return false;
-    const all = [].concat(d.added || [], d.changed || []).join(" ").toLowerCase();
-    return Boolean((host.ip && all.includes(String(host.ip).toLowerCase())) || (host.hostname && all.includes(String(host.hostname).toLowerCase())));
-  }
+  function isHostChanged(host) { const d = state.snapshotDiff; if (!d) return false; const all = [].concat(d.added || [], d.changed || []).join(" ").toLowerCase(); return Boolean((host.ip && all.includes(String(host.ip).toLowerCase())) || (host.hostname && all.includes(String(host.hostname).toLowerCase()))); }
 
   function upsertBaselineOption(id, selectNow) {
     const sel = $("baselineSelect"), clean = String(id || "").trim();
@@ -183,6 +170,15 @@
     applyLanFilters();
   }
 
+  const isLaaMac = (mac) => { const c = String(mac || "").replace(/[:.-]/g, ""), b = c.length >= 2 ? parseInt(c.slice(0, 2), 16) : NaN; return Number.isFinite(b) && (b & 0x02) !== 0; };
+  const isVirtualHost = (h, isV) => Boolean(isV || (h && (h.segment === "laa" || isLaaMac(h.mac))));
+  function formatLanRuntimeVendor(h, isV) {
+    const rt = String((h && h.runtime) || "").trim(), vn = String((h && h.vendor) || "").trim();
+    if (!isV) return vn || "—";
+    const rtGen = !rt || /laa|virtual/i.test(rt), vnGen = !vn || /locally administered|laa|virtual/i.test(vn);
+    return (!rtGen && vnGen) ? rt + " · Virtual MAC" : (!rtGen && !vnGen && rt.toLowerCase() !== vn.toLowerCase()) ? rt + " · " + vn : "Virtual MAC (Docker / VM)";
+  }
+
   function applyLanFilters() {
     const q = ($("lanFilterInput") ? $("lanFilterInput").value : "").trim().toLowerCase(), onlyChg = state.lanSegment === "changed";
     const matches = (h) => (!q || [h.ip, h.hostname, h.mac, h.vendor, h.runtime, h.open_ports].join(" ").toLowerCase().includes(q)) && (!onlyChg || isHostChanged(h));
@@ -194,9 +190,9 @@
       if (h.rtt_ms !== undefined) rtt.append(makeSvgBar(h.rtt_ms), el("span", "tabular-nums", Number(h.rtt_ms).toFixed(2) + " ms")); else rtt.append(el("span", "", "—"));
       if (Array.isArray(h.open_ports) && h.open_ports.length) rtt.append(el("span", "card-meta", " · [" + h.open_ports.join(", ") + "]"));
       acts.append(mkBtn("Ping", "ping", h), mkBtn("Check Ports", "ports", h));
-      if (h.mac) acts.append(mkBtn("Wake", "wake", h));
+      if (h.mac && !isVirtualHost(h, isV)) acts.append(mkBtn("Wake", "wake", h));
       acts.append(mkBtn("Save", "save", h));
-      return { cells: [["IP Address", h.ip, "tabular-nums"], ["Device Name", (h.hostname || "—") + (isHostChanged(h) ? " (Changed)" : "")], ["MAC Address", h.mac || "—", "tabular-nums"], [isV ? "Runtime / Vendor" : "Vendor", isV && h.runtime ? h.runtime + " · " + (h.vendor || "") : (h.vendor || "—")], ["Response & Open Ports", rtt], ["Actions", acts]] };
+      return { cells: [["IP Address", h.ip, "tabular-nums"], ["Device Name", (h.hostname || "—") + (isHostChanged(h) ? " (Changed)" : "")], ["MAC Address", h.mac || "—", "tabular-nums"], [isV ? "Runtime / Vendor" : "Vendor", formatLanRuntimeVendor(h, isV)], ["Response & Open Ports", rtt], ["Actions", acts]] };
     };
     renderTableRows($("lanPhysicalBody"), phys, spec(false)); renderTableRows($("lanVirtualBody"), virt, spec(true));
     $("lanPhysicalCount").textContent = phys.length + (phys.length === 1 ? " device" : " devices");
@@ -211,7 +207,7 @@
   function renderSnapshotDiff(diff) {
     const d = diff || {}; state.snapshotDiff = d; $("snapshotDiffPanel").hidden = false;
     upsertBaselineOption(d.baseline_id, false); upsertBaselineOption(d.current_id, false);
-    $("snapshotDiffMeta").textContent = (d.baseline_id || "baseline") + " -> " + (d.current_id || "current");
+    $("snapshotDiffMeta").textContent = (d.baseline_id || "baseline") + " → " + (d.current_id || "current");
     [["diffAddedList", "diffAddedCount", d.added], ["diffRemovedList", "diffRemovedCount", d.removed], ["diffChangedList", "diffChangedCount", d.changed]].forEach(([lId, cId, raw]) => {
       const list = Array.isArray(raw) ? raw : [], frag = document.createDocumentFragment();
       $(cId).textContent = String(list.length);
@@ -222,25 +218,33 @@
     applyLanFilters();
   }
 
+  const syncHistoryRangeUI = (range) => document.querySelectorAll("#historyRangeGroup [data-range]").forEach((b) => b.setAttribute("aria-pressed", b.getAttribute("data-range") === range ? "true" : "false"));
+  const plainHysteresis = (raw) => { const s = String(raw || "").trim(), l = s.toLowerCase(); return !s || /^0\/2\b/.test(l) ? "Healthy" : /^1\/2\b/.test(l) ? "1 failed check" : (/^2\/2\b/.test(l) || l === "alert active") ? "Alerting" : s; };
+
   function renderHistory(cronData, jobsOverride) {
     const cron = cronData || {}, jobs = Array.isArray(jobsOverride) ? jobsOverride : (Array.isArray(cron.jobs) ? cron.jobs : []), ts = Array.isArray(cron.timeseries) ? cron.timeseries : [];
     const wl = Array.isArray(cron.watchlist) ? cron.watchlist : [];
     const sampleCount = Number(cron.summary && cron.summary.sample_count ? cron.summary.sample_count : (ts.reduce((a, b) => a + Number(b.total_count || 0), 0) || jobs.length));
     $("historyWarmupBanner").hidden = !(Boolean(cron.warmup) || sampleCount < 10);
-    $("historyWarmupText").textContent = "Warming up — " + sampleCount + (sampleCount === 1 ? " check collected" : " checks collected") + (sampleCount < 10 ? " (collecting baseline samples)." : ".");
+    $("historyWarmupText").textContent = sampleCount + (sampleCount === 1 ? " check run" : " check runs") + (wl.length === 0 ? " saved — enable 5-minute monitoring on any destination for continuous uptime tracking." : " saved — multi-day uptime trends build as daily history is recorded.");
     $("historySampleMeta").textContent = sampleCount + (sampleCount === 1 ? " check" : " checks") + " · " + state.historyRange;
     if (globalScope.NetutilsCharts) globalScope.NetutilsCharts.renderHistoryTimeline($("historyTimelineHost"), ts);
+    const note = ($("historyTimelineHost") && $("historyTimelineHost").dataset ? $("historyTimelineHost").dataset.scaleNote || "" : "").trim();
+    if ($("historyScaleNote")) { $("historyScaleNote").hidden = !note; $("historyScaleNote").textContent = note; }
     $("watchlistEmptyState").hidden = wl.length > 0; $("watchlistTableWrap").hidden = wl.length === 0;
     renderTableRows($("watchlistBody"), wl, (w) => {
       const pill = el("span", "va-pill", String(w.health || "OK").toUpperCase()), wrap = el("div", "uptime-strip-cell"), segs = el("span", "uptime-segments");
       setStatusPill(pill, pill.textContent);
-      const slots = Array.isArray(cron.strip) && cron.strip.length ? cron.strip.slice(-8) : [], cnt = Math.max(6, slots.length);
+      const rowHist = Array.isArray(w.recent_statuses) && w.recent_statuses.length ? w.recent_statuses.slice(-8) : [pill.textContent];
+      const cnt = Math.max(6, rowHist.length), pad = Math.max(0, cnt - rowHist.length);
       for (let i = 0; i < cnt; i += 1) {
-        const seg = el("span", "uptime-seg"), rawSt = slots[i] ? String(slots[i].status || "OK").toUpperCase() : (i === cnt - 1 ? pill.textContent : "OK");
-        seg.setAttribute("data-state", rawSt === "FAIL" ? "fail" : rawSt === "WARN" ? "warn" : "ok");
+        const seg = el("span", "uptime-seg");
+        if (i < pad) seg.setAttribute("data-state", "empty");
+        else { const rawSt = String(rowHist[i - pad] || "OK").toUpperCase(); seg.setAttribute("data-state", /^(FAIL|ERROR)$/.test(rawSt) ? "fail" : /^(WARN|WARNING)$/.test(rawSt) ? "warn" : "ok"); }
         segs.appendChild(seg);
       }
-      wrap.append(segs, el("span", "tabular-nums card-meta", w.uptime_pct !== undefined ? Number(w.uptime_pct).toFixed(1) + "%" : (w.hysteresis || "Healthy")));
+      const statusLabel = plainHysteresis(w.hysteresis);
+      wrap.append(segs, el("span", "tabular-nums card-meta", w.uptime_pct !== undefined ? (Number(w.uptime_pct).toFixed(1) + "% · " + statusLabel) : statusLabel));
       const rtt = (w.avg_ms !== undefined ? Number(w.avg_ms).toFixed(1) : "—") + " / " + (w.max_ms !== undefined ? Number(w.max_ms).toFixed(1) : "—") + " ms";
       return { cells: [["Destination", w.target], ["Check", getCheckLabel(w.check)], ["Status", pill], ["Uptime & Trend", wrap], ["Avg / Peak Time", rtt, "tabular-nums"], ["Last Checked", fmtTime(w.last_tick), "tabular-nums"]] };
     });
@@ -256,14 +260,18 @@
   function buildDemoOutcome(tool, target, extra) {
     const snap = state.demoSnapshot || {}, jobs = (snap.cron && snap.cron.jobs) || [];
     const tpl = (tool === "recipe_diff_ping" && snap.default_run) || (snap.tool_runs && snap.tool_runs[tool]) || jobs.find((j) => j.tool === tool) || snap.default_run || {};
-    const tgt = target || (extra && extra.mac) || (snap.default_targets && snap.default_targets[tool]) || "canary.example.net";
-    return {
-      job_id: "job-demo-" + Date.now().toString(36), tool, target: tgt, status: tpl.status || "OK", duration_ms: tpl.duration_ms || 14,
+    const tgt = target || (extra && extra.mac) || (snap.default_targets && snap.default_targets[tool]) || "1.1.1.1";
+    return { job_id: "job-demo-" + Date.now().toString(36), tool, target: tgt, status: tpl.status || "OK", duration_ms: tpl.duration_ms || 14,
       summary: tpl.summary || (getCheckLabel(tool) + " completed for " + tgt + "."), created_at: new Date().toISOString(), expires_at: tpl.expires_at || "2026-12-26T23:00:00Z",
       waterfall: tpl.waterfall, whiskers: tpl.whiskers, tls_health: tpl.tls_health, dns_comparisons: tpl.dns_comparisons, data: tpl.data,
-      lan_inventory: tool === "recipe_lan_radar" ? snap.lan_inventory : null,
-      snapshot_diff: tool === "recipe_diff_snapshot" && snap.lan_inventory ? snap.lan_inventory.snapshot_diff : null
-    };
+      lan_inventory: tool === "recipe_lan_radar" ? snap.lan_inventory : null, snapshot_diff: tool === "recipe_diff_snapshot" && snap.lan_inventory ? snap.lan_inventory.snapshot_diff : null };
+  }
+
+  function failActiveRun(msg, seq) {
+    if (seq != null && seq !== state.liveJobSeq) return;
+    const txt = msg || "Check failed."; setStatusPill($("runStatusBadge"), "[FAIL]", "fault");
+    if ($("runResultDuration")) $("runResultDuration").textContent = "—";
+    if ($("runResultSummary")) $("runResultSummary").textContent = txt; announce(txt);
   }
 
   async function executeRun(payload, triggerBtn, opts) {
@@ -275,17 +283,17 @@
       announce("Completed " + getCheckLabel(payload.tool) + ".");
       return out;
     }
-    state.liveJobSeq += 1;
-    const btn = triggerBtn || $("runCheckBtn");
+    const runSeq = ++state.liveJobSeq, btn = triggerBtn || $("runCheckBtn");
     if (btn) btn.setAttribute("aria-busy", "true");
     setStatusPill($("runStatusBadge"), "[RUNNING]", "warn"); announce("Running " + getCheckLabel(payload.tool) + "...");
     try {
       const r = await apiFetch("./api/run", { method: "POST", bodyObj: Object.assign({ style: "json" }, payload) });
-      if (!r.res.ok) { setStatusPill($("runStatusBadge"), "[FAIL]", "fault"); $("runResultSummary").textContent = (r.data && (r.data.error || r.data.message)) || "Check failed."; announce("Check failed."); return null; }
+      if (runSeq !== state.liveJobSeq || state.mode !== "live") return null;
+      if (!r.res.ok) { failActiveRun((r.data && (r.data.error || r.data.message)) || "Check failed.", runSeq); return null; }
       if (globalScope.NetutilsResults) globalScope.NetutilsResults.renderOutcome(r.data, true);
       announce("Completed " + getCheckLabel(payload.tool) + "."); loadLiveWorkspace();
       return r.data;
-    } catch (_) { setStatusPill($("runStatusBadge"), "[FAIL]", "fault"); announce("Network error while running check."); return null; }
+    } catch (_) { if (state.mode === "live") failActiveRun("Network error while running check.", runSeq); return null; }
     finally { if (btn) btn.setAttribute("aria-busy", "false"); }
   }
 
@@ -298,17 +306,19 @@
   }
 
   async function loadLiveWorkspace() {
-    const wsSeq = state.liveJobSeq;
-    const [cronPair, jobsPair] = await Promise.all([apiFetch("./api/cron?period=30d&range=" + encodeURIComponent(state.historyRange)), apiFetch("./api/jobs")]);
+    const wsSeq = ++state.wsReqSeq, runSnapshot = state.liveJobSeq;
+    const [cronPair, jobsPair] = await Promise.all([apiFetch("./api/cron?period=30d&range=" + encodeURIComponent(state.userSelectedRange ? state.historyRange : "auto")), apiFetch("./api/jobs")]);
+    if (wsSeq !== state.wsReqSeq || state.mode !== "live") return;
     if (globalScope.NetutilsDestinations) await globalScope.NetutilsDestinations.refresh();
+    if (wsSeq !== state.wsReqSeq || state.mode !== "live") return;
     const cronRes = cronPair.data || {}, jobsRes = jobsPair.data, jobs = Array.isArray(jobsRes) ? jobsRes : (jobsRes && Array.isArray(jobsRes.jobs) ? jobsRes.jobs : (cronRes.jobs || []));
+    if (cronRes.range && !state.userSelectedRange) { state.historyRange = cronRes.range; syncHistoryRangeUI(state.historyRange); }
     renderSummary(cronRes.summary || (jobsRes && jobsRes.summary) || { retained_jobs: jobs.length });
     renderHistory(cronRes, jobs);
     if (cronRes.lan_inventory) ingestLanData(cronRes.lan_inventory); else applyLanFilters();
-    if (jobs.length > 0 && !state.lastRun && jobs[0].job_id && wsSeq === state.liveJobSeq) {
-      const jobSeq = ++state.liveJobSeq;
+    if (jobs.length > 0 && !state.lastRun && state.liveJobSeq === runSnapshot && jobs[0].job_id) {
       const d = await apiFetch("./api/jobs/" + encodeURIComponent(jobs[0].job_id) + "?style=json");
-      if (jobSeq === state.liveJobSeq && !state.lastRun && state.mode === "live" && d.res.ok && globalScope.NetutilsResults) globalScope.NetutilsResults.renderOutcome(d.data, true);
+      if (state.liveJobSeq === runSnapshot && wsSeq === state.wsReqSeq && !state.lastRun && state.mode === "live" && d.res.ok && globalScope.NetutilsResults) globalScope.NetutilsResults.renderOutcome(d.data, true);
     }
   }
 
@@ -348,7 +358,8 @@
     try {
       const r = await apiFetch("./api/unlock", { method: "POST", bodyObj: { passphrase: candidate }, skipAuthRedirect: true });
       if (!r.res.ok || r.data.locked === true) { const msg = r.res.status === 429 || r.data.locked_out ? "Too many failed attempts. Try again shortly." : "Invalid operator passphrase."; syncValidity(passInput, msg); announce(msg); return passInput.focus(); }
-      passInput.value = ""; syncValidity(passInput, ""); setStudioModeUI("live", r.data.enabled !== false && r.data.deadbolt_enabled !== false);
+      const form = $("unlockForm"); if (form) form.reset();
+      syncValidity(passInput, ""); setStudioModeUI("live", r.data.enabled !== false && r.data.deadbolt_enabled !== false);
       announce("Network studio unlocked."); loadLiveWorkspace();
     } catch (_) { syncValidity(passInput, "Unable to reach studio unlock endpoint."); } finally { btn.setAttribute("aria-busy", "false"); }
   }
@@ -408,7 +419,7 @@
     $("themeSelect").addEventListener("change", (ev) => applyTheme(ev.target.value));
     wireSegmented("densityToggle", "data-density", applyDensity);
     wireSegmented("lanSegmentGroup", "data-segment", (seg) => { state.lanSegment = seg; applyLanFilters(); });
-    wireSegmented("historyRangeGroup", "data-range", (r) => { state.historyRange = r; if (state.mode === "demo") applyDemoRange(r); else loadLiveWorkspace(); });
+    wireSegmented("historyRangeGroup", "data-range", (r) => { state.userSelectedRange = true; state.historyRange = r; if (state.mode === "demo") applyDemoRange(r); else loadLiveWorkspace(); });
     wireRequired($("passphraseInput"), "Enter the operator passphrase."); wireRequired($("targetInput"), "Enter a destination host, IP, or URL.");
     $("unlockForm").addEventListener("submit", handleUnlockSubmit);
     $("lockModeBtn").addEventListener("click", async () => {
@@ -422,8 +433,7 @@
     $("kpiHistoryCard").addEventListener("click", () => jumpHistory("jobArchiveCard"));
     $("kpiDestinationsCard").addEventListener("click", () => {
       const dests = globalScope.NetutilsDestinations ? globalScope.NetutilsDestinations.getDestinations() : [];
-      if (!dests.length && globalScope.NetutilsDestinations) return globalScope.NetutilsDestinations.openEditor({});
-      setActiveTab("checks"); globalScope.requestAnimationFrame(() => { if (globalScope.NetutilsResults) globalScope.NetutilsResults.focusTargetSection($("savedDestinationsSection")); });
+      if (globalScope.NetutilsDestinations) { if (!dests.length) globalScope.NetutilsDestinations.openEditor({}); else globalScope.NetutilsDestinations.openManager(); }
     });
     $("refreshHistoryBtn").addEventListener("click", () => { if (state.mode === "demo") applyDemoRange(state.historyRange); else loadLiveWorkspace(); announce("History refreshed."); });
     $("jobArchiveBody").addEventListener("click", (ev) => { const row = ev.target.closest("tr[data-job-id]"); if (row && globalScope.NetutilsResults) globalScope.NetutilsResults.openJobDrawer(row.getAttribute("data-job-id")); });
@@ -440,6 +450,7 @@
     renderSummary(snap.summary);
     if (snap.default_run) { state.demoJobsById[snap.default_run.job_id] = snap.default_run; if (globalScope.NetutilsResults) globalScope.NetutilsResults.renderOutcome(snap.default_run, true); }
     if (snap.lan_inventory) ingestLanData(snap.lan_inventory);
+    if (!state.userSelectedRange) { state.historyRange = (snap && snap.cron && snap.cron.warmup) ? "24h" : ((snap && snap.cron && snap.cron.range) || "30d"); syncHistoryRangeUI(state.historyRange); }
     applyDemoRange(state.historyRange);
   }
 
@@ -463,7 +474,7 @@
     if (globalScope.NetutilsDestinations) globalScope.NetutilsDestinations.init({
       apiFetch, announce, getCheckLabel, renderTableRows, wireRequired, syncValidity, bindDialogDismiss, runDemoTool: buildDemoOutcome,
       getCheckCatalog: () => Object.keys(CHECKS).map((id) => Object.assign({ id }, CHECKS[id])),
-      onBeforeRun: (tool, target, isAsync) => { if (globalScope.NetutilsResults) globalScope.NetutilsResults.beginRunFocus(tool, target, isAsync); },
+      onBeforeRun: (tool, target, isAsync) => { const runSeq = ++state.liveJobSeq; if (globalScope.NetutilsResults) globalScope.NetutilsResults.beginRunFocus(tool, target, isAsync); return runSeq; },
       onFocusSection: (sec) => { setActiveTab("checks"); globalScope.requestAnimationFrame(() => { if (globalScope.NetutilsResults) globalScope.NetutilsResults.focusTargetSection(sec); }); },
       onLiveWorkspaceRefresh: () => { if (state.mode === "live") loadLiveWorkspace(); },
       onSelectPinned: (d) => {
@@ -474,14 +485,14 @@
         } else executeRun({ tool: d.default_check || "recipe_diff_ping", target: d.target || "" }, null, { focusResult: true });
       },
       onSelectWakeMac: (d) => { $("wakeMacInput").value = d.mac || ""; if (!$("targetInput").value.trim()) $("targetInput").value = d.target || ""; syncCheckContext(); announce("Selected MAC for " + d.name + "."); },
-      onShowOutcome: (out) => { if (globalScope.NetutilsResults) globalScope.NetutilsResults.renderOutcome(out, true); },
+      onShowOutcome: (out, dest, runSeq) => { if (runSeq != null && runSeq !== state.liveJobSeq) return; if (globalScope.NetutilsResults) globalScope.NetutilsResults.renderOutcome(out, true); },
+      onRunError: (msg, runSeq) => { failActiveRun(msg, runSeq); },
       onDestinationsChanged: () => { state.destinationsLoaded = true; renderSummary(state.lastSummary); }
     });
     bindCheckAndLanEvents(); bindGlobalEvents(); syncCheckContext();
     if (new URLSearchParams(globalScope.location.search).get("demo") === "1" || globalScope.NETUTILS_STATIC_DEMO === true) {
       if (globalScope.NETUTILS_DEMO_SNAPSHOT) return hydrateDemoSnapshot(globalScope.NETUTILS_DEMO_SNAPSHOT);
-      try { let res = await globalScope.fetch("./api/demo_snapshot", { headers: { Accept: "application/json" } }); if (!res.ok) res = await globalScope.fetch("./demo_snapshots/demo_snapshot.json", { headers: { Accept: "application/json" } }); hydrateDemoSnapshot(await res.json()); } catch (_) { announce("Unable to load sample workspace data."); }
-      return;
+      try { let res = await globalScope.fetch("./api/demo_snapshot", { headers: { Accept: "application/json" } }); if (!res.ok) res = await globalScope.fetch("./demo_snapshots/demo_snapshot.json", { headers: { Accept: "application/json" } }); hydrateDemoSnapshot(await res.json()); } catch (_) { announce("Unable to load sample workspace data."); } return;
     }
     try { const r = await apiFetch("./api/status", { skipAuthRedirect: true }); if (!r.res.ok || r.data.locked === true) return enterLockedMode(""); setStudioModeUI("live", r.data.enabled !== false && r.data.deadbolt_enabled !== false); loadLiveWorkspace(); } catch (_) { enterLockedMode(""); }
   }

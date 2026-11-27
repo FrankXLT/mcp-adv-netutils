@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"syscall"
 	"unicode"
 )
 
@@ -16,6 +17,7 @@ type TargetGuard struct {
 	denyNets     []*net.IPNet
 	blockPrivate bool
 	lookupIPAddr func(ctx context.Context, host string) ([]net.IPAddr, error)
+	dialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 const (
@@ -65,6 +67,7 @@ func NewTargetGuardWithOptions(allowCIDRs, denyCIDRs []string, blockPrivate bool
 		denyNets:     denyNets,
 		blockPrivate: blockPrivate,
 		lookupIPAddr: net.DefaultResolver.LookupIPAddr,
+		dialContext:  (&net.Dialer{}).DialContext,
 	}, nil
 }
 
@@ -262,7 +265,8 @@ func (g *TargetGuard) DialContext(ctx context.Context, network, addr string) (ne
 		return nil, fmt.Errorf("%w: no validated IP addresses for %q", ErrTargetInvalid, host)
 	}
 
-	dialer := &net.Dialer{}
+	ips = orderIPv4First(ips)
+	dialFn := guard.dialFn()
 	var lastErr error
 	for _, ip := range ips {
 		if ctx.Err() != nil {
@@ -271,11 +275,11 @@ func (g *TargetGuard) DialContext(ctx context.Context, network, addr string) (ne
 			}
 			break
 		}
-		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		conn, dialErr := dialFn(ctx, network, net.JoinHostPort(ip.String(), port))
 		if dialErr == nil {
 			return conn, nil
 		}
-		lastErr = dialErr
+		lastErr = selectDialError(lastErr, dialErr)
 	}
 
 	return nil, fmt.Errorf("failed to dial %q: %w", addr, lastErr)
@@ -286,6 +290,47 @@ func (g *TargetGuard) lookupFn() func(ctx context.Context, host string) ([]net.I
 		return g.lookupIPAddr
 	}
 	return net.DefaultResolver.LookupIPAddr
+}
+
+func (g *TargetGuard) dialFn() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	if g != nil && g.dialContext != nil {
+		return g.dialContext
+	}
+	return (&net.Dialer{}).DialContext
+}
+
+// orderIPv4First returns ips stably partitioned with IPv4 addresses before IPv6 addresses.
+func orderIPv4First(ips []net.IP) []net.IP {
+	if len(ips) <= 1 {
+		return ips
+	}
+	ordered := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			ordered = append(ordered, ip)
+		}
+	}
+	for _, ip := range ips {
+		if ip.To4() == nil {
+			ordered = append(ordered, ip)
+		}
+	}
+	return ordered
+}
+
+// selectDialError preserves the first meaningful non-EADDRNOTAVAIL failure so
+// trailing unconfigured-IPv6 errors do not mask earlier IPv4 dial failures.
+func selectDialError(current, next error) error {
+	if next == nil {
+		return current
+	}
+	if current == nil {
+		return next
+	}
+	if errors.Is(current, syscall.EADDRNOTAVAIL) && !errors.Is(next, syscall.EADDRNOTAVAIL) {
+		return next
+	}
+	return current
 }
 
 func (g *TargetGuard) effectiveRules() ([]*net.IPNet, []*net.IPNet, bool, error) {

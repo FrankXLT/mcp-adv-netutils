@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -37,6 +38,23 @@ type WhoisResponse struct {
 type whoisLookupResult struct {
 	data string
 	err  error
+}
+
+type guardProxyDialer struct {
+	ctx   context.Context
+	guard *security.TargetGuard
+}
+
+//nolint:ireturn // Implements proxy.Dialer interface required by likexian/whois.
+func (d *guardProxyDialer) Dial(network, addr string) (net.Conn, error) {
+	if d == nil || d.guard == nil {
+		return nil, errors.New("WHOIS target guard is not configured")
+	}
+	conn, err := d.guard.DialContext(d.ctx, network, addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial WHOIS target via target guard: %w", err)
+	}
+	return conn, nil
 }
 
 // HandleWhoisQuery processes WHOIS queries.
@@ -106,6 +124,9 @@ func Execute(ctx context.Context, params WhoisQueryParams, cfg *Config) (*WhoisR
 
 	client := whois.NewClient()
 	client.SetTimeout(timeout)
+	if guard != nil {
+		client.SetDialer(&guardProxyDialer{ctx: ctxWithTimeout, guard: guard})
+	}
 
 	ch := make(chan whoisLookupResult, 1)
 	go func() {

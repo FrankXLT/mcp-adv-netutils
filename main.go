@@ -71,7 +71,7 @@ const (
 	modeHTTP
 	modeWatchlistOnce
 
-	defaultVersion        = "2.0.0"
+	defaultVersion        = "2.0.1"
 	defaultHTTPAddr       = ":8000"
 	defaultWatchlistFile  = "watchlist.yaml"
 	defaultAppWatchlist   = "/app/watchlist.yaml"

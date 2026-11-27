@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,30 +37,26 @@ type stripDay struct {
 }
 
 type watchlistRow struct {
-	Key        string  `json:"key"`
-	Target     string  `json:"target"`
-	Check      string  `json:"check"`
-	Health     string  `json:"health"`
-	Hysteresis string  `json:"hysteresis"`
-	AvgMS      float64 `json:"avg_ms"`
-	MaxMS      float64 `json:"max_ms"`
-	LastTick   string  `json:"last_tick"`
+	Key            string   `json:"key"`
+	Target         string   `json:"target"`
+	Check          string   `json:"check"`
+	Health         string   `json:"health"`
+	Hysteresis     string   `json:"hysteresis"`
+	AvgMS          float64  `json:"avg_ms"`
+	MaxMS          float64  `json:"max_ms"`
+	LastTick       string   `json:"last_tick"`
+	RecentStatuses []string `json:"recent_statuses,omitempty"`
 }
 
 type jobSummaryRow struct {
-	JobID     string `json:"job_id"`
-	Tool      string `json:"tool"`
-	Target    string `json:"target"`
-	Status    string `json:"status"`
-	Summary   string `json:"summary"`
-	CreatedAt string `json:"created_at"`
-	ExpiresAt string `json:"expires_at"`
-}
-
-type durAgg struct {
-	sum   float64
-	count int64
-	max   float64
+	JobID      string `json:"job_id"`
+	Tool       string `json:"tool"`
+	Target     string `json:"target"`
+	Status     string `json:"status"`
+	Summary    string `json:"summary"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	ExpiresAt  string `json:"expires_at"`
 }
 
 func (h *studioHandler) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +126,14 @@ func (h *studioHandler) handleCron(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	strip := buildStripDays(cronStatus.DailyStats)
+	isWarmup := len(strip) < 2
+	if strings.EqualFold(rawRange, "auto") {
+		rawRange = "30d"
+		if isWarmup {
+			rawRange = "24h"
+		}
+	}
 	timeseries, normRange, sampleCount, err := buildCronTimeseries(r.Context(), h.store, cronStatus, rawRange, time.Now().UTC())
 	if err != nil {
 		writeMappedError(w, err)
@@ -139,19 +141,12 @@ func (h *studioHandler) handleCron(w http.ResponseWriter, r *http.Request) {
 	}
 	wlRows := buildWatchlistRows(wlItems, cronStatus, jobs)
 	resp := cronResponse{
-		Locked:     !unlocked,
-		Summary:    buildWorkspaceSummary(cronStatus, &stats, wlRows, sampleCount),
-		Warmup:     len(cronStatus.DailyStats) < 2,
-		Strip:      buildStripDays(cronStatus.DailyStats),
-		Watchlist:  []watchlistRow{},
-		Jobs:       []jobSummaryRow{},
-		Timeseries: timeseries,
-		Range:      normRange,
+		Locked: !unlocked, Summary: buildWorkspaceSummary(cronStatus, &stats, wlRows, sampleCount),
+		Warmup: isWarmup, Strip: strip,
+		Watchlist: []watchlistRow{}, Jobs: []jobSummaryRow{}, Timeseries: timeseries, Range: normRange,
 	}
 	if unlocked {
-		resp.Watchlist = wlRows
-		resp.Jobs = toJobSummaryRows(jobs)
-		resp.LANInventory = h.findLatestLANInventory(r.Context(), jobs)
+		resp.Watchlist, resp.Jobs, resp.LANInventory = wlRows, toJobSummaryRows(jobs), h.findLatestLANInventory(r.Context(), jobs)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -310,7 +305,7 @@ func extractLANInventory(rec *store.JobRecord) *dispatch.LANInventoryView {
 func buildWorkspaceSummary(cronStatus *store.CronSummary, stats *store.StoreStats, watchlist []watchlistRow, sampleCount int64) workspaceSummary {
 	healthy, alerts := 0, 0
 	for i := range watchlist {
-		if watchlist[i].Hysteresis == "2/2 alert" {
+		if watchlist[i].Hysteresis == "Alerting" || watchlist[i].Hysteresis == "2/2 alert" {
 			alerts++
 		} else if watchlist[i].Health == "OK" {
 			healthy++
@@ -352,117 +347,6 @@ func buildWorkspaceSummary(cronStatus *store.CronSummary, stats *store.StoreStat
 	}
 }
 
-func buildStripDays(daily []store.CronDailyStat) []stripDay {
-	type agg struct {
-		ok, warn, fail, total int64
-		weighted              float64
-	}
-	byDay := make(map[string]*agg)
-	for i := range daily {
-		d := &daily[i]
-		a := byDay[d.DayUTC]
-		if a == nil {
-			a = &agg{}
-			byDay[d.DayUTC] = a
-		}
-		ticks := d.OKCount + d.WarnCount + d.FailCount
-		a.ok, a.warn, a.fail, a.total = a.ok+d.OKCount, a.warn+d.WarnCount, a.fail+d.FailCount, a.total+ticks
-		a.weighted += d.AvgDurationMS * float64(ticks)
-	}
-	days := make([]string, 0, len(byDay))
-	for day := range byDay {
-		days = append(days, day)
-	}
-	sort.Strings(days)
-	strip := make([]stripDay, 0, len(days))
-	for _, day := range days {
-		a, status, avg := byDay[day], "OK", 0.0
-		if a.fail > 0 {
-			status = "FAIL"
-		} else if a.warn > 0 {
-			status = "WARN"
-		}
-		if a.total > 0 {
-			avg = roundTo(a.weighted/float64(a.total), 2)
-		}
-		strip = append(strip, stripDay{Label: day, Status: status, AvgMs: avg, Detail: fmt.Sprintf("%d/%d ticks OK · avg %.1f ms", a.ok, a.total, avg)})
-	}
-	return strip
-}
-
-func buildWatchlistRows(items []cronmon.WatchItem, cronStatus *store.CronSummary, jobs []store.JobRecord) []watchlistRow {
-	stateByKey := make(map[string]*store.CronStateRecord)
-	dailyDur, jobDur := make(map[string]durAgg), make(map[string]durAgg)
-	if cronStatus != nil {
-		for i := range cronStatus.States {
-			stateByKey[cronStatus.States[i].JobKey] = &cronStatus.States[i]
-		}
-		for i := range cronStatus.DailyStats {
-			d := &cronStatus.DailyStats[i]
-			ticks := d.OKCount + d.WarnCount + d.FailCount
-			c := dailyDur[d.JobKey]
-			c.sum += d.AvgDurationMS * float64(ticks)
-			c.count += ticks
-			dailyDur[d.JobKey] = c
-		}
-	}
-	for i := range jobs {
-		k, d := jobs[i].ToolName+"\x00"+jobs[i].Target, float64(jobs[i].DurationMS)
-		c := jobDur[k]
-		c.sum, c.count, c.max = c.sum+d, c.count+1, max(c.max, d)
-		jobDur[k] = c
-	}
-	seen := make(map[string]struct{}, len(items)+len(stateByKey))
-	rows := make([]watchlistRow, 0, len(items)+len(stateByKey))
-	for i := range items {
-		seen[items[i].Key] = struct{}{}
-		rows = append(rows, makeWatchlistRow(items[i].Key, items[i].Target, items[i].Tool, stateByKey[items[i].Key], dailyDur, jobDur))
-	}
-	var extra []string
-	for k := range stateByKey {
-		if _, ok := seen[k]; !ok {
-			extra = append(extra, k)
-		}
-	}
-	sort.Strings(extra)
-	for _, k := range extra {
-		st := stateByKey[k]
-		rows = append(rows, makeWatchlistRow(st.JobKey, st.Target, st.ToolName, st, dailyDur, jobDur))
-	}
-	return rows
-}
-
-func makeWatchlistRow(key, target, tool string, st *store.CronStateRecord, dailyDur, jobDur map[string]durAgg) watchlistRow {
-	health, hyst, lastTick := "OK", "0/2 clear", ""
-	if st != nil {
-		if s := strings.ToUpper(strings.TrimSpace(st.LastStatus)); s != "" {
-			health = s
-		}
-		if st.ActiveAlert || st.ConsecutiveNonOK >= 2 {
-			hyst = "2/2 alert"
-		} else if st.ConsecutiveNonOK == 1 {
-			hyst = "1/2 warn"
-		}
-		if st.LastTickAt > 0 {
-			lastTick = time.Unix(st.LastTickAt, 0).UTC().Format(time.RFC3339)
-		}
-	}
-	var avgMS, maxMS float64
-	if a := dailyDur[key]; a.count > 0 {
-		avgMS = roundTo(a.sum/float64(a.count), 2)
-	}
-	if a := jobDur[tool+"\x00"+target]; a.count > 0 {
-		if avgMS == 0 {
-			avgMS = roundTo(a.sum/float64(a.count), 2)
-		}
-		maxMS = roundTo(a.max, 2)
-	}
-	if maxMS == 0 && avgMS > 0 {
-		maxMS = avgMS
-	}
-	return watchlistRow{Key: key, Target: target, Check: tool, Health: health, Hysteresis: hyst, AvgMS: avgMS, MaxMS: maxMS, LastTick: lastTick}
-}
-
 func toJobSummaryRows(jobs []store.JobRecord) []jobSummaryRow {
 	rows := make([]jobSummaryRow, 0, len(jobs))
 	for i := range jobs {
@@ -476,7 +360,7 @@ func toJobSummaryRows(jobs []store.JobRecord) []jobSummaryRow {
 		}
 		rows = append(rows, jobSummaryRow{
 			JobID: j.JobID, Tool: j.ToolName, Target: j.Target, Status: j.Status,
-			Summary: j.Summary, CreatedAt: created, ExpiresAt: expires,
+			Summary: j.Summary, DurationMS: j.DurationMS, CreatedAt: created, ExpiresAt: expires,
 		})
 	}
 	return rows

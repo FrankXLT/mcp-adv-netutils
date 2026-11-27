@@ -486,4 +486,7 @@ func splitTrim(in []string) []string {
 	return out
 }
 
-func msSince(started time.Time) int64 { return time.Since(started).Milliseconds() }
+func msSince(started time.Time) int64 {
+	durMS, _ := measureDuration(started)
+	return durMS
+}
