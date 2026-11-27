@@ -1,0 +1,424 @@
+package traceroute
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestTracerouteHelperProcess acts as a deterministic mock `traceroute` binary in subprocesses.
+func TestTracerouteHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+
+	args := os.Args
+	sepIdx := -1
+	for i, arg := range args {
+		if arg == "--" {
+			sepIdx = i
+			break
+		}
+	}
+	if sepIdx < 0 {
+		fmt.Fprintln(os.Stderr, "missing -- separator")
+		os.Exit(2)
+	}
+
+	cmdArgs := args[sepIdx+1:]
+	// Expect: -n -w <timeout> -m <maxHops> -- <target>
+	if len(cmdArgs) != 7 || cmdArgs[0] != "-n" || cmdArgs[1] != "-w" || cmdArgs[3] != "-m" || cmdArgs[5] != "--" {
+		fmt.Fprintf(os.Stderr, "unexpected args: %v\n", cmdArgs)
+		os.Exit(2)
+	}
+
+	mode := os.Getenv("TRACEROUTE_TEST_MODE")
+	switch mode {
+	case "normal":
+		fmt.Printf("traceroute to %s (%s), 15 hops max, 60 byte packets\n", cmdArgs[6], cmdArgs[6])
+		fmt.Println(" 1  192.168.1.1  0.500 ms  1.000 ms  1.500 ms")
+		fmt.Println(" 2  * * *")
+		fmt.Println(" 3  * 10.0.0.3  2.500 ms  3.500 ms")
+		fmt.Println(" 4  10.0.0.4  4.000 ms  10.0.0.5  6.000 ms")
+		fmt.Println(" 5  10.0.0.6  5.000 ms")
+		fmt.Println("    10.0.0.7  7.000 ms")
+		fmt.Println(" 6  127.0.0.1  0.250 ms  0.350 ms")
+		os.Exit(0)
+	case "many_hops":
+		fmt.Printf("traceroute to %s (%s), 15 hops max, 60 byte packets\n", cmdArgs[6], cmdArgs[6])
+		for i := 1; i <= 14; i++ {
+			fmt.Printf(" %d  10.0.1.%d  1.000 ms\n", i, i)
+		}
+		os.Exit(0)
+	case "exit1_with_hops":
+		fmt.Printf("traceroute to %s (%s), 15 hops max, 60 byte packets\n", cmdArgs[6], cmdArgs[6])
+		fmt.Println(" 1  192.168.1.1  1.000 ms")
+		fmt.Println(" 2  * * *")
+		os.Exit(1)
+	case "exit1_no_hops":
+		fmt.Fprintln(os.Stderr, "traceroute: permission denied")
+		os.Exit(1)
+	case "sleep":
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	default:
+		os.Exit(2)
+	}
+}
+
+func helperCommandContext(mode string) func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+	return func(ctx context.Context, _ string, arg ...string) *exec.Cmd {
+		cs := append([]string{"-test.run=TestTracerouteHelperProcess", "--"}, arg...)
+		cmd := exec.CommandContext(ctx, os.Args[0], cs...)
+		cmd.Env = append(os.Environ(),
+			"GO_WANT_HELPER_PROCESS=1",
+			"TRACEROUTE_TEST_MODE="+mode,
+		)
+		return cmd
+	}
+}
+
+func TestExecuteTargetValidation(t *testing.T) {
+	guard, err := security.NewTargetGuard(nil, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		target    string
+		guard     *security.TargetGuard
+		targetErr error
+	}{
+		{name: "empty", target: "", guard: nil, targetErr: security.ErrTargetInvalid},
+		{name: "whitespace", target: "   ", guard: nil, targetErr: security.ErrTargetInvalid},
+		{name: "leading_dash", target: "-n", guard: nil, targetErr: security.ErrTargetInvalid},
+		{name: "leading_dash_padded", target: " --help", guard: guard, targetErr: security.ErrTargetInvalid},
+		{name: "url_slash", target: "127.0.0.1/24", guard: guard, targetErr: security.ErrTargetInvalid},
+		{name: "metadata_ipv4_blocked", target: "169.254.169.254", guard: guard, targetErr: security.ErrTargetDenied},
+		{name: "metadata_ipv6_blocked", target: "fd00:ec2::254", guard: guard, targetErr: security.ErrTargetDenied},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, execErr := Execute(context.Background(), TracerouteParams{Target: tc.target}, tc.guard)
+			require.Error(t, execErr)
+			assert.True(t, errors.Is(execErr, tc.targetErr), "expected %v, got %v", tc.targetErr, execErr)
+		})
+	}
+
+	t.Run("nil_context", func(t *testing.T) {
+		//nolint:staticcheck // intentionally testing nil context guard
+		_, execErr := Execute(nil, TracerouteParams{Target: "127.0.0.1"}, guard)
+		require.Error(t, execErr)
+	})
+}
+
+func TestExecuteParsingAndFlagProtection(t *testing.T) {
+	guard, err := security.NewTargetGuard([]string{"127.0.0.0/8"}, nil)
+	require.NoError(t, err)
+
+	deps := execDeps{
+		lookPath:       func(string) (string, error) { return "/usr/bin/traceroute", nil },
+		commandContext: helperCommandContext("normal"),
+		lookupIPAddr:   func(context.Context, string) ([]net.IPAddr, error) { return nil, errors.New("unused") },
+		lookupAddr: func(ctx context.Context, addr string) ([]string, error) {
+			_, ok := ctx.Deadline()
+			assert.True(t, ok, "PTR lookup context must carry a timeout")
+			if addr == "192.168.1.1" {
+				return []string{"gw.home.arpa."}, nil
+			}
+			return nil, errors.New("no PTR")
+		},
+	}
+
+	maxHops := 10
+	timeout := 1
+	res, err := executeWithDeps(context.Background(), TracerouteParams{
+		Target:  "127.0.0.1",
+		MaxHops: &maxHops,
+		Timeout: &timeout,
+	}, guard, deps)
+	require.NoError(t, err)
+
+	assert.Equal(t, "127.0.0.1", res.Target)
+	assert.Equal(t, "127.0.0.1", res.ResolvedIP)
+	assert.Equal(t, 10, res.MaxHops)
+	assert.True(t, res.ReachedDestination)
+	require.Len(t, res.Hops, 6)
+
+	// Hop 1: normal with PTR hostname trimmed of trailing dot
+	assert.Equal(t, 1, res.Hops[0].Hop)
+	assert.Equal(t, "192.168.1.1", res.Hops[0].IP)
+	assert.Equal(t, "gw.home.arpa", res.Hops[0].Hostname)
+	assert.False(t, res.Hops[0].TimedOut)
+	assert.InDelta(t, 1.0, res.Hops[0].AvgRTTMs, 0.001)
+
+	// Hop 2: * * *
+	assert.Equal(t, 2, res.Hops[1].Hop)
+	assert.Equal(t, "*", res.Hops[1].IP)
+	assert.True(t, res.Hops[1].TimedOut)
+
+	// Hop 3: partial timeout (* 10.0.0.3 2.500 ms 3.500 ms)
+	assert.Equal(t, 3, res.Hops[2].Hop)
+	assert.Equal(t, "10.0.0.3", res.Hops[2].IP)
+	assert.False(t, res.Hops[2].TimedOut)
+	assert.Equal(t, []float64{2.5, 3.5}, res.Hops[2].RTTMs)
+	assert.InDelta(t, 3.0, res.Hops[2].AvgRTTMs, 0.001)
+
+	// Hop 4: multi-IP line (10.0.0.4 + 10.0.0.5)
+	assert.Equal(t, 4, res.Hops[3].Hop)
+	assert.Equal(t, "10.0.0.4", res.Hops[3].IP)
+	assert.Equal(t, []float64{4.0, 6.0}, res.Hops[3].RTTMs)
+	assert.InDelta(t, 5.0, res.Hops[3].AvgRTTMs, 0.001)
+
+	// Hop 5: continuation line merged
+	assert.Equal(t, 5, res.Hops[4].Hop)
+	assert.Equal(t, "10.0.0.6", res.Hops[4].IP)
+	assert.Equal(t, []float64{5.0, 7.0}, res.Hops[4].RTTMs)
+	assert.InDelta(t, 6.0, res.Hops[4].AvgRTTMs, 0.001)
+
+	// Hop 6: destination reached
+	assert.Equal(t, 6, res.Hops[5].Hop)
+	assert.Equal(t, "127.0.0.1", res.Hops[5].IP)
+}
+
+func TestExecuteBoundedConcurrentPTRLookups(t *testing.T) {
+	var current atomic.Int32
+	var maxSeen atomic.Int32
+
+	deps := execDeps{
+		lookPath:       func(string) (string, error) { return "/usr/bin/traceroute", nil },
+		commandContext: helperCommandContext("many_hops"),
+		lookupIPAddr:   func(context.Context, string) ([]net.IPAddr, error) { return nil, nil },
+		lookupAddr: func(ctx context.Context, addr string) ([]string, error) {
+			n := current.Add(1)
+			for {
+				prev := maxSeen.Load()
+				if n <= prev || maxSeen.CompareAndSwap(prev, n) {
+					break
+				}
+			}
+			deadline, ok := ctx.Deadline()
+			assert.True(t, ok)
+			assert.LessOrEqual(t, time.Until(deadline), 1100*time.Millisecond)
+
+			time.Sleep(20 * time.Millisecond)
+			current.Add(-1)
+			return []string{"hop-" + strings.ReplaceAll(addr, ".", "-") + ".local."}, nil
+		},
+	}
+
+	res, err := executeWithDeps(context.Background(), TracerouteParams{Target: "127.0.0.1"}, nil, deps)
+	require.NoError(t, err)
+	require.Len(t, res.Hops, 14)
+
+	assert.LessOrEqual(t, maxSeen.Load(), int32(ptrConcurrencyLimit))
+	assert.GreaterOrEqual(t, maxSeen.Load(), int32(2))
+	for i, hop := range res.Hops {
+		assert.Equal(t, "hop-10-0-1-"+strconv.Itoa(i+1)+".local", hop.Hostname)
+	}
+}
+
+func TestExecuteWaitErrorHandling(t *testing.T) {
+	baseDeps := execDeps{
+		lookPath:     func(string) (string, error) { return "/usr/bin/traceroute", nil },
+		lookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) { return nil, nil },
+		lookupAddr:   func(context.Context, string) ([]string, error) { return nil, errors.New("none") },
+	}
+
+	t.Run("exit1_with_parsed_hops_succeeds", func(t *testing.T) {
+		deps := baseDeps
+		deps.commandContext = helperCommandContext("exit1_with_hops")
+
+		res, err := executeWithDeps(context.Background(), TracerouteParams{Target: "127.0.0.1"}, nil, deps)
+		require.NoError(t, err)
+		require.Len(t, res.Hops, 2)
+		assert.False(t, res.ReachedDestination)
+	})
+
+	t.Run("exit1_with_no_hops_fails", func(t *testing.T) {
+		deps := baseDeps
+		deps.commandContext = helperCommandContext("exit1_no_hops")
+
+		_, err := executeWithDeps(context.Background(), TracerouteParams{Target: "127.0.0.1"}, nil, deps)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "traceroute failed")
+	})
+
+	t.Run("canceled_context_fails", func(t *testing.T) {
+		deps := baseDeps
+		deps.commandContext = helperCommandContext("sleep")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+		defer cancel()
+
+		_, err := executeWithDeps(ctx, TracerouteParams{Target: "127.0.0.1"}, nil, deps)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "traceroute canceled")
+	})
+}
+
+func TestHandleTracerouteRejectsInvalidTarget(t *testing.T) {
+	req := mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name: "traceroute",
+			Arguments: map[string]any{
+				"target": "-h",
+			},
+		},
+	}
+
+	_, err := HandleTraceroute(context.Background(), req)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, security.ErrTargetInvalid))
+}
+
+func TestTracerouteResponseJSONSchema(t *testing.T) {
+	res := TracerouteResponse{
+		Target:     "127.0.0.1",
+		ResolvedIP: "127.0.0.1",
+		MaxHops:    15,
+		Hops:       []HopResult{{Hop: 1, IP: "127.0.0.1", RTTMs: []float64{0.5}, AvgRTTMs: 0.5}},
+		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+	}
+	b, err := json.Marshal(res)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"target":"127.0.0.1"`)
+}
+
+func TestExecutePinsResolvedIPToCommand(t *testing.T) {
+	t.Run("passes resolved IP to traceroute binary instead of hostname", func(t *testing.T) {
+		var capturedTargetArg string
+		baseCmd := helperCommandContext("normal")
+		deps := execDeps{
+			lookPath: func(string) (string, error) { return "/usr/bin/traceroute", nil },
+			commandContext: func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+				if len(arg) > 0 {
+					capturedTargetArg = arg[len(arg)-1]
+				}
+				return baseCmd(ctx, name, arg...)
+			},
+			lookupIPAddr: func(_ context.Context, host string) ([]net.IPAddr, error) {
+				assert.Equal(t, "pinned.example", host)
+				return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+			},
+			lookupAddr: func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") },
+		}
+
+		res, err := executeWithDeps(context.Background(), TracerouteParams{Target: "pinned.example"}, nil, deps)
+		require.NoError(t, err)
+		assert.Equal(t, "127.0.0.1", capturedTargetArg)
+		assert.Equal(t, "pinned.example", res.Target)
+		assert.Equal(t, "127.0.0.1", res.ResolvedIP)
+		assert.True(t, res.ReachedDestination)
+	})
+
+	t.Run("blocks hostname resolving to metadata IP before spawning command", func(t *testing.T) {
+		var cmdCalled bool
+		deps := execDeps{
+			lookPath: func(string) (string, error) { return "/usr/bin/traceroute", nil },
+			commandContext: func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+				cmdCalled = true
+				return helperCommandContext("normal")(ctx, name, arg...)
+			},
+			lookupIPAddr: func(_ context.Context, _ string) ([]net.IPAddr, error) {
+				return []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, nil
+			},
+			lookupAddr: func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") },
+		}
+
+		_, err := executeWithDeps(context.Background(), TracerouteParams{Target: "rebind.example"}, nil, deps)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, security.ErrTargetDenied)
+		assert.False(t, cmdCalled)
+	})
+}
+
+func TestValidateAndResolveTargetNilGuardFailClosed(t *testing.T) {
+	errLookup := func(context.Context, string) ([]net.IPAddr, error) {
+		return nil, errors.New("nxdomain")
+	}
+	emptyLookup := func(context.Context, string) ([]net.IPAddr, error) {
+		return nil, nil
+	}
+
+	rejectedTargets := []string{
+		"0177.0.0.1",
+		"0251.0376.0251.0376",
+		"0x7f000001",
+		"0xa9.0xfe.0xa9.0xfe",
+		"2130706433",
+		"2852039166",
+		"127.1",
+		"169.254.43518",
+		"169.254.169.254.",
+		"[169.254.169.254]",
+		"[::1]",
+		"169.254.169.254:80",
+		"::ffff:0251.0376.0251.0376",
+		"foo..bar",
+	}
+
+	for _, target := range rejectedTargets {
+		for _, tc := range []struct {
+			name   string
+			lookup func(context.Context, string) ([]net.IPAddr, error)
+		}{
+			{name: "lookup_error", lookup: errLookup},
+			{name: "lookup_empty", lookup: emptyLookup},
+		} {
+			t.Run(target+"/"+tc.name, func(t *testing.T) {
+				var cmdCalled bool
+				deps := execDeps{
+					lookPath: func(string) (string, error) { return "/usr/bin/traceroute", nil },
+					commandContext: func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+						cmdCalled = true
+						return helperCommandContext("normal")(ctx, name, arg...)
+					},
+					lookupIPAddr: tc.lookup,
+					lookupAddr:   func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") },
+				}
+
+				_, err := executeWithDeps(context.Background(), TracerouteParams{Target: target}, nil, deps)
+				require.Error(t, err)
+				assert.ErrorIs(t, err, security.ErrTargetInvalid)
+				assert.False(t, cmdCalled)
+			})
+		}
+	}
+
+	validHostnames := []string{
+		"mock.example",
+		"123.example.com",
+		"0x1.example.com",
+		"localhost",
+	}
+	for _, host := range validHostnames {
+		t.Run("valid_hostname_fallback/"+host, func(t *testing.T) {
+			deps := execDeps{
+				lookPath:       func(string) (string, error) { return "/usr/bin/traceroute", nil },
+				commandContext: helperCommandContext("normal"),
+				lookupIPAddr:   emptyLookup,
+				lookupAddr:     func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") },
+			}
+
+			res, err := executeWithDeps(context.Background(), TracerouteParams{Target: host}, nil, deps)
+			require.NoError(t, err)
+			assert.Equal(t, host, res.Target)
+			assert.Empty(t, res.ResolvedIP)
+		})
+	}
+}

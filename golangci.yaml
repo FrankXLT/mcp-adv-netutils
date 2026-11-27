@@ -91,6 +91,7 @@ linters:
       allow:
         - error
         - http.Handler
+        - context.Context
     perfsprint:
       int-conversion: false
       err-error: false
@@ -99,9 +100,9 @@ linters:
       strconcat: false
     staticcheck:
       checks:
-        - -SA1019
-        - -ST1003
-        - all
+        - "all"
+        - "-SA1019"
+        - "-ST1003"
   exclusions:
     generated: lax
     presets:
@@ -109,6 +110,10 @@ linters:
       - common-false-positives
       - legacy
       - std-error-handling
+    rules:
+      - linters:
+          - revive
+        text: "^exported: type name will be used as .* by other packages, and that stutters"
     paths:
       - third_party$
       - builtin$

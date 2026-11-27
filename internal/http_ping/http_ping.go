@@ -3,26 +3,32 @@ package http_ping
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	resp "github.com/FrankXLT/mcp-adv-netutils/internal/response"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/utils"
 	"github.com/mark3labs/mcp-go/mcp"
-	resp "github.com/patrickdappollonio/mcp-netutils/internal/response"
-	"github.com/patrickdappollonio/mcp-netutils/internal/utils"
 )
 
 // Config holds HTTP ping configuration.
 type Config struct {
-	Timeout time.Duration
-	Count   int
+	Timeout   time.Duration
+	Count     int
+	Guard     *security.TargetGuard
+	TLSConfig *tls.Config
 }
 
-// httpPingParams represents the parameters for HTTP ping operations.
-type httpPingParams struct {
+// HTTPPingParams represents the parameters for HTTP ping operations.
+type HTTPPingParams struct {
 	URL    string `json:"url"`
 	Method string `json:"method"`
 	Count  *int   `json:"count"`
@@ -30,19 +36,19 @@ type httpPingParams struct {
 
 // HTTPPingResult represents the result of a single HTTP ping.
 type HTTPPingResult struct {
-	Sequence   int           `json:"sequence"`
-	Method     string        `json:"method"`
-	URL        string        `json:"url"`
-	StatusCode int           `json:"status_code"`
-	Status     string        `json:"status"`
-	DNSTime    time.Duration `json:"dns_time_ms"`
-	ConnTime   time.Duration `json:"connect_time_ms"`
-	TLSTime    time.Duration `json:"tls_time_ms"`
-	TTFBTime   time.Duration `json:"ttfb_time_ms"`
-	TotalTime  time.Duration `json:"total_time_ms"`
-	Success    bool          `json:"success"`
-	Error      string        `json:"error,omitempty"`
-	OneLiner   string        `json:"one_liner"`
+	Sequence   int     `json:"sequence"`
+	Method     string  `json:"method"`
+	URL        string  `json:"url"`
+	StatusCode int     `json:"status_code"`
+	Status     string  `json:"status"`
+	DNSTime    float64 `json:"dns_time_ms"`
+	ConnTime   float64 `json:"connect_time_ms"`
+	TLSTime    float64 `json:"tls_time_ms"`
+	TTFBTime   float64 `json:"ttfb_time_ms"`
+	TotalTime  float64 `json:"total_time_ms"`
+	Success    bool    `json:"success"`
+	Error      string  `json:"error,omitempty"`
+	OneLiner   string  `json:"one_liner"`
 }
 
 // HTTPPingResponse represents the complete HTTP ping response.
@@ -53,254 +59,393 @@ type HTTPPingResponse struct {
 	SuccessCount int              `json:"success_count"`
 	FailureCount int              `json:"failure_count"`
 	Results      []HTTPPingResult `json:"results"`
-	AvgDNSTime   time.Duration    `json:"avg_dns_time_ms"`
-	AvgConnTime  time.Duration    `json:"avg_connect_time_ms"`
-	AvgTLSTime   time.Duration    `json:"avg_tls_time_ms"`
-	AvgTTFBTime  time.Duration    `json:"avg_ttfb_time_ms"`
-	AvgTotalTime time.Duration    `json:"avg_total_time_ms"`
+	AvgDNSTime   float64          `json:"avg_dns_time_ms"`
+	AvgConnTime  float64          `json:"avg_connect_time_ms"`
+	AvgTLSTime   float64          `json:"avg_tls_time_ms"`
+	AvgTTFBTime  float64          `json:"avg_ttfb_time_ms"`
+	AvgTotalTime float64          `json:"avg_total_time_ms"`
 	Timestamp    string           `json:"timestamp"`
 }
 
 // timingStats holds timing statistics for calculations.
 type timingStats struct {
-	totalDNS   time.Duration
-	totalConn  time.Duration
-	totalTLS   time.Duration
-	totalTTFB  time.Duration
-	totalTotal time.Duration
+	totalDNS   float64
+	totalConn  float64
+	totalTLS   float64
+	totalTTFB  float64
+	totalTotal float64
 	count      int
 }
 
+type traceTimings struct {
+	mu        sync.Mutex
+	dnsStart  time.Time
+	dnsEnd    time.Time
+	connStart time.Time
+	connEnd   time.Time
+	tlsStart  time.Time
+	tlsEnd    time.Time
+	reqStart  time.Time
+	respStart time.Time
+}
+
+const (
+	defaultTimeout    = 10 * time.Second
+	defaultCount      = 1
+	maxRedirects      = 10
+	maxBodyDrainBytes = 1 << 20
+	interRequestDelay = time.Second
+	httpPingUserAgent = "mcp-netutils/http_ping"
+)
+
 // HandleHTTPPing performs HTTP ping operations to test connectivity to a HTTP endpoint.
+//
+//nolint:gocritic // Exported handler mirrors mcp-go ToolHandlerFunc value parameter.
 func HandleHTTPPing(ctx context.Context, request mcp.CallToolRequest, config *Config) (*mcp.CallToolResult, error) {
-	var params httpPingParams
+	var params HTTPPingParams
 	if err := request.BindArguments(&params); err != nil {
 		return nil, fmt.Errorf("failed to parse tool input: %w", utils.ParseJSONUnmarshalError(err))
 	}
 
-	// Validate required parameters
-	if params.URL == "" {
-		return nil, fmt.Errorf("parameter \"url\" is required")
-	}
-
-	// Parse and validate URL
-	parsedURL, err := url.Parse(params.URL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
-	}
-
-	// Ensure we have a scheme
-	if parsedURL.Scheme == "" {
-		parsedURL.Scheme = "https"
-	}
-
-	// Validate scheme
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported URL scheme: %s", parsedURL.Scheme)
-	}
-
-	// Set default method if not provided
-	method := strings.ToUpper(params.Method)
-	if method == "" {
-		method = "GET"
-	}
-
-	// Validate method
-	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" && method != "PATCH" {
-		return nil, fmt.Errorf("unsupported HTTP method: %s", method)
-	}
-
-	// Set default count if not provided
-	count := config.Count
-	if params.Count != nil && *params.Count > 0 {
-		count = *params.Count
-	}
-
-	// Create context with timeout
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, config.Timeout)
-	defer cancel()
-
-	// Perform HTTP ping
-	httpResponse, err := performHTTPPing(ctxWithTimeout, method, parsedURL, count, config.Timeout)
+	httpResponse, err := Execute(ctx, params, config)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP ping failed: %w", err)
 	}
 
 	// Use the response package to handle JSON encoding and MCP tool result creation
-	return resp.JSON(httpResponse)
+	toolResult, err := resp.JSON(httpResponse)
+	if err != nil {
+		return nil, fmt.Errorf("encode HTTP ping response: %w", err)
+	}
+	return toolResult, nil
+}
+
+// Execute validates parameters and performs the HTTP ping operation.
+func Execute(ctx context.Context, params HTTPPingParams, cfg *Config) (*HTTPPingResponse, error) {
+	if ctx == nil {
+		return nil, errors.New("context must not be nil")
+	}
+
+	parsedURL, err := parseAndValidateURL(params.URL)
+	if err != nil {
+		return nil, err
+	}
+
+	method, err := normalizeAndValidateMethod(params.Method)
+	if err != nil {
+		return nil, err
+	}
+
+	timeout, count, guard, tlsConfig := resolveConfig(cfg, params.Count)
+	if guard == nil {
+		if guard, err = security.NewTargetGuard(nil, nil); err != nil {
+			return nil, fmt.Errorf("failed to initialize target guard: %w", err)
+		}
+	}
+
+	// Create context with timeout
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if _, err := guard.ValidateHostOrIP(ctxWithTimeout, parsedURL.Hostname()); err != nil {
+		return nil, fmt.Errorf("target blocked by security policy: %w", err)
+	}
+
+	return performHTTPPing(ctxWithTimeout, method, parsedURL, count, timeout, guard, tlsConfig), nil
+}
+
+func parseAndValidateURL(rawURL string) (*url.URL, error) {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return nil, errors.New("parameter \"url\" is required")
+	}
+
+	parsedURL, err := url.Parse(trimmed)
+	if (err != nil && !strings.Contains(trimmed, "://")) || (err == nil && parsedURL.Scheme == "") {
+		parsedURL, err = url.Parse("https://" + trimmed)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported URL scheme: %s", parsedURL.Scheme)
+	}
+
+	if parsedURL.Hostname() == "" {
+		return nil, errors.New("invalid URL: missing host")
+	}
+
+	return parsedURL, nil
+}
+
+func normalizeAndValidateMethod(rawMethod string) (string, error) {
+	method := strings.ToUpper(strings.TrimSpace(rawMethod))
+	if method == "" {
+		return http.MethodGet, nil
+	}
+
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete,
+		http.MethodHead, http.MethodOptions, http.MethodPatch:
+		return method, nil
+	default:
+		return "", fmt.Errorf("unsupported HTTP method: %s", method)
+	}
+}
+
+func resolveConfig(cfg *Config, paramCount *int) (time.Duration, int, *security.TargetGuard, *tls.Config) {
+	timeout, count := defaultTimeout, defaultCount
+	var guard *security.TargetGuard
+	var tlsConfig *tls.Config
+
+	if cfg != nil {
+		if cfg.Timeout > 0 {
+			timeout = cfg.Timeout
+		}
+		if cfg.Count > 0 {
+			count = cfg.Count
+		}
+		guard = cfg.Guard
+		tlsConfig = cfg.TLSConfig
+	}
+
+	if paramCount != nil && *paramCount > 0 {
+		count = *paramCount
+	}
+
+	return timeout, count, guard, tlsConfig
 }
 
 // performHTTPPing executes the actual HTTP ping operation.
-func performHTTPPing(ctx context.Context, method string, parsedURL *url.URL, count int, timeout time.Duration) (*HTTPPingResponse, error) {
-	// Create clean URL without query parameters for display
-	cleanURL := &url.URL{
-		Scheme: parsedURL.Scheme,
-		Host:   parsedURL.Host,
-		Path:   parsedURL.Path,
-	}
+func performHTTPPing(
+	ctx context.Context,
+	method string,
+	parsedURL *url.URL,
+	count int,
+	timeout time.Duration,
+	guard *security.TargetGuard,
+	tlsConfig *tls.Config,
+) *HTTPPingResponse {
+	cleanTarget := cleanURLString(parsedURL)
 
 	response := &HTTPPingResponse{
-		Target:       cleanURL.String(),
-		Method:       method,
-		RequestsSent: count,
-		Results:      make([]HTTPPingResult, 0, count),
-		Timestamp:    time.Now().Format(time.RFC3339),
+		Target:    cleanTarget,
+		Method:    method,
+		Results:   make([]HTTPPingResult, 0, count),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	transport := &http.Transport{
+		DisableKeepAlives: true, // Ensure fresh connections for accurate timing
+		Proxy:             nil,
+		DialContext:       guard.DialContext,
+		TLSClientConfig:   tlsConfig,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			redirectHost := req.URL.Hostname()
+			if redirectHost == "" {
+				return errors.New("redirect URL missing host")
+			}
+			if _, err := guard.ValidateHostOrIP(req.Context(), redirectHost); err != nil {
+				return fmt.Errorf("redirect target blocked by security policy: %w", err)
+			}
+			return nil
+		},
 	}
 
 	var stats timingStats
 
+pingLoop:
 	for i := 0; i < count; i++ {
 		select {
 		case <-ctx.Done():
-			return response, nil
+			break pingLoop
 		default:
 		}
 
-		result := performSingleHTTPPing(ctx, method, parsedURL, i+1, timeout)
+		result := performSingleHTTPPing(ctx, client, method, parsedURL, cleanTarget, i+1)
 		response.Results = append(response.Results, result)
 
 		if result.Success {
 			response.SuccessCount++
-			updateTimingStats(&stats, result)
+			updateTimingStats(&stats, &result)
 		} else {
 			response.FailureCount++
 		}
 
 		// Wait between requests (except for the last one)
 		if i < count-1 {
-			time.Sleep(time.Second)
+			timer := time.NewTimer(interRequestDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				break pingLoop
+			case <-timer.C:
+			}
 		}
 	}
 
-	// Calculate averages
+	response.RequestsSent = len(response.Results)
 	calculateAverages(response, &stats)
 
-	return response, nil
+	return response
 }
 
-// performSingleHTTPPing performs a single HTTP ping request.
-func performSingleHTTPPing(ctx context.Context, method string, parsedURL *url.URL, sequence int, timeout time.Duration) HTTPPingResult {
+func cleanURLString(parsedURL *url.URL) string {
 	// Create clean URL without query parameters for display
 	cleanURL := &url.URL{
 		Scheme: parsedURL.Scheme,
 		Host:   parsedURL.Host,
 		Path:   parsedURL.Path,
 	}
+	return cleanURL.String()
+}
 
+// performSingleHTTPPing performs a single HTTP ping request.
+func performSingleHTTPPing(
+	ctx context.Context,
+	client *http.Client,
+	method string,
+	parsedURL *url.URL,
+	cleanTarget string,
+	sequence int,
+) HTTPPingResult {
 	result := HTTPPingResult{
 		Sequence: sequence,
 		Method:   method,
-		URL:      cleanURL.String(),
+		URL:      cleanTarget,
 	}
 
-	// Timing variables
-	var dnsStart, dnsEnd time.Time
-	var connStart, connEnd time.Time
-	var tlsStart, tlsEnd time.Time
-	var reqStart, respStart time.Time
-
-	// Create HTTP trace
-	trace := &httptrace.ClientTrace{
-		DNSStart: func(dnsInfo httptrace.DNSStartInfo) {
-			dnsStart = time.Now()
-		},
-		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
-			dnsEnd = time.Now()
-		},
-		ConnectStart: func(network, addr string) {
-			connStart = time.Now()
-		},
-		ConnectDone: func(network, addr string, err error) {
-			connEnd = time.Now()
-		},
-		TLSHandshakeStart: func() {
-			tlsStart = time.Now()
-		},
-		TLSHandshakeDone: func(state tls.ConnectionState, err error) {
-			tlsEnd = time.Now()
-		},
-		WroteRequest: func(info httptrace.WroteRequestInfo) {
-			reqStart = time.Now()
-		},
-		GotFirstResponseByte: func() {
-			respStart = time.Now()
-		},
-	}
-
-	// Create HTTP client with trace
-	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			DisableKeepAlives: true, // Ensure fresh connections for accurate timing
-		},
-	}
-
-	// Create request
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), method, parsedURL.String(), nil)
+	timings, trace := newTraceTimings()
+	reqCtx := httptrace.WithClientTrace(ctx, trace)
+	req, err := http.NewRequestWithContext(reqCtx, method, parsedURL.String(), http.NoBody)
 	if err != nil {
 		result.Error = fmt.Sprintf("failed to create request: %v", err)
-		result.OneLiner = fmt.Sprintf("%s %s ERROR | %s", method, cleanURL.String(), result.Error)
+		result.OneLiner = fmt.Sprintf("%s %s ERROR | %s", method, cleanTarget, result.Error)
 		return result
 	}
 
-	// Set User-Agent
-	req.Header.Set("User-Agent", "mcp-netutils/http_ping")
+	req.Header.Set("User-Agent", httpPingUserAgent)
 
-	// Record start time
 	startTime := time.Now()
 
-	// Perform request
-	resp, err := client.Do(req)
+	httpResp, err := client.Do(req)
 	if err != nil {
-		totalTime := time.Since(startTime)
-		result.TotalTime = totalTime
+		result.TotalTime = durationToMillis(time.Since(startTime))
 		result.Error = fmt.Sprintf("request failed: %v", err)
-		result.OneLiner = fmt.Sprintf("%s %s ERROR | total=%dms | %s", method, cleanURL.String(), totalTime.Milliseconds(), result.Error)
+		result.OneLiner = fmt.Sprintf("%s %s ERROR | total=%.2fms | %s", method, cleanTarget, result.TotalTime, result.Error)
 		return result
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(httpResp.Body, maxBodyDrainBytes))
+		_ = httpResp.Body.Close()
 	}()
 
-	// Record end time
 	endTime := time.Now()
 
-	// Calculate timings
-	result.TotalTime = endTime.Sub(startTime)
-	result.StatusCode = resp.StatusCode
-	result.Status = resp.Status
-	result.Success = resp.StatusCode >= 200 && resp.StatusCode < 400
+	result.TotalTime = durationToMillis(endTime.Sub(startTime))
+	result.StatusCode = httpResp.StatusCode
+	result.Status = httpResp.Status
+	result.Success = httpResp.StatusCode >= 200 && httpResp.StatusCode < 400
+	timings.applyToResult(&result)
 
-	// Calculate individual timings
-	if !dnsEnd.IsZero() && !dnsStart.IsZero() {
-		result.DNSTime = dnsEnd.Sub(dnsStart)
-	}
-	if !connEnd.IsZero() && !connStart.IsZero() {
-		result.ConnTime = connEnd.Sub(connStart)
-	}
-	if !tlsEnd.IsZero() && !tlsStart.IsZero() {
-		result.TLSTime = tlsEnd.Sub(tlsStart)
-	}
-	if !respStart.IsZero() && !reqStart.IsZero() {
-		result.TTFBTime = respStart.Sub(reqStart)
-	}
-
-	// Create one-liner format
 	var tlsInfo string
 	if parsedURL.Scheme == "https" {
-		tlsInfo = fmt.Sprintf("tls=%dms ", result.TLSTime.Milliseconds())
+		tlsInfo = fmt.Sprintf("tls=%.2fms ", result.TLSTime)
 	}
 
-	result.OneLiner = fmt.Sprintf("%s %s %d %s | dns=%dms conn=%dms %sttfb=%dms total=%dms",
-		method, cleanURL.String(), result.StatusCode, getStatusText(result.StatusCode),
-		result.DNSTime.Milliseconds(), result.ConnTime.Milliseconds(),
-		tlsInfo, result.TTFBTime.Milliseconds(), result.TotalTime.Milliseconds())
+	result.OneLiner = fmt.Sprintf("%s %s %d %s | dns=%.2fms conn=%.2fms %sttfb=%.2fms total=%.2fms",
+		method, cleanTarget, result.StatusCode, getStatusText(result.StatusCode),
+		result.DNSTime, result.ConnTime, tlsInfo, result.TTFBTime, result.TotalTime)
 
 	return result
 }
 
+func newTraceTimings() (*traceTimings, *httptrace.ClientTrace) {
+	t := &traceTimings{}
+	trace := &httptrace.ClientTrace{
+		DNSStart: func(_ httptrace.DNSStartInfo) {
+			t.mu.Lock()
+			t.dnsStart = time.Now()
+			t.mu.Unlock()
+		},
+		DNSDone: func(_ httptrace.DNSDoneInfo) {
+			t.mu.Lock()
+			t.dnsEnd = time.Now()
+			t.mu.Unlock()
+		},
+		ConnectStart: func(_, _ string) {
+			t.mu.Lock()
+			t.connStart = time.Now()
+			t.mu.Unlock()
+		},
+		ConnectDone: func(_, _ string, _ error) {
+			t.mu.Lock()
+			t.connEnd = time.Now()
+			t.mu.Unlock()
+		},
+		TLSHandshakeStart: func() {
+			t.mu.Lock()
+			t.tlsStart = time.Now()
+			t.mu.Unlock()
+		},
+		TLSHandshakeDone: func(_ tls.ConnectionState, _ error) {
+			t.mu.Lock()
+			t.tlsEnd = time.Now()
+			t.mu.Unlock()
+		},
+		WroteRequest: func(_ httptrace.WroteRequestInfo) {
+			t.mu.Lock()
+			t.reqStart = time.Now()
+			t.mu.Unlock()
+		},
+		GotFirstResponseByte: func() {
+			t.mu.Lock()
+			t.respStart = time.Now()
+			t.mu.Unlock()
+		},
+	}
+	return t, trace
+}
+
+func (t *traceTimings) applyToResult(result *HTTPPingResult) {
+	t.mu.Lock()
+	dnsDur := subIfBothSet(t.dnsStart, t.dnsEnd)
+	connDur := subIfBothSet(t.connStart, t.connEnd)
+	tlsDur := subIfBothSet(t.tlsStart, t.tlsEnd)
+	ttfbDur := subIfBothSet(t.reqStart, t.respStart)
+	t.mu.Unlock()
+
+	result.DNSTime = durationToMillis(dnsDur)
+	result.ConnTime = durationToMillis(connDur)
+	result.TLSTime = durationToMillis(tlsDur)
+	result.TTFBTime = durationToMillis(ttfbDur)
+}
+
+func subIfBothSet(start, end time.Time) time.Duration {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return 0
+	}
+	return end.Sub(start)
+}
+
+func durationToMillis(d time.Duration) float64 {
+	if d <= 0 {
+		return 0
+	}
+	return float64(d.Microseconds()) / 1000.0
+}
+
 // updateTimingStats updates the timing statistics with a successful result.
-func updateTimingStats(stats *timingStats, result HTTPPingResult) {
+func updateTimingStats(stats *timingStats, result *HTTPPingResult) {
 	stats.totalDNS += result.DNSTime
 	stats.totalConn += result.ConnTime
 	stats.totalTLS += result.TLSTime
@@ -312,11 +457,12 @@ func updateTimingStats(stats *timingStats, result HTTPPingResult) {
 // calculateAverages calculates and sets the average timing statistics.
 func calculateAverages(response *HTTPPingResponse, stats *timingStats) {
 	if stats.count > 0 {
-		response.AvgDNSTime = stats.totalDNS / time.Duration(stats.count)
-		response.AvgConnTime = stats.totalConn / time.Duration(stats.count)
-		response.AvgTLSTime = stats.totalTLS / time.Duration(stats.count)
-		response.AvgTTFBTime = stats.totalTTFB / time.Duration(stats.count)
-		response.AvgTotalTime = stats.totalTotal / time.Duration(stats.count)
+		n := float64(stats.count)
+		response.AvgDNSTime = stats.totalDNS / n
+		response.AvgConnTime = stats.totalConn / n
+		response.AvgTLSTime = stats.totalTLS / n
+		response.AvgTTFBTime = stats.totalTTFB / n
+		response.AvgTotalTime = stats.totalTotal / n
 	}
 }
 

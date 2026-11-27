@@ -1,2 +1,9 @@
 mcp-netutils
+mcp-adv-netutils
 dist/
+build/
+*.cov
+coverage.out
+.serena/
+__pycache__/
+*.py[cod]

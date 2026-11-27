@@ -1,0 +1,630 @@
+{
+  "banner": "Sample Workspace — Offline Demo Data (Sanitized)",
+  "generated_at": "2026-11-26T23:00:00Z",
+  "summary": {
+    "cron_health_pct": 96.7,
+    "healthy_targets": 5,
+    "total_targets": 6,
+    "active_alerts": 1,
+    "retained_jobs": 10,
+    "archive_mb": 1.8,
+    "archive_max_mb": 256,
+    "saved_destinations": 6,
+    "sample_count": 48
+  },
+  "destinations": [
+    {
+      "id": "dest_demo_gw",
+      "name": "Core Gateway",
+      "target": "192.0.2.1",
+      "category": "Core",
+      "mac": "00:00:5E:00:53:01",
+      "default_check": "ping",
+      "pinned": true,
+      "monitor_enabled": true,
+      "monitor_schedule": "*/5 * * * *",
+      "created_at": 1795640000,
+      "updated_at": 1795730000
+    },
+    {
+      "id": "dest_demo_api",
+      "name": "Public API Health",
+      "target": "https://api.example.com/health",
+      "category": "Website & API",
+      "mac": "",
+      "default_check": "recipe_diff_http",
+      "pinned": true,
+      "monitor_enabled": true,
+      "monitor_schedule": "*/5 * * * *",
+      "created_at": 1795640100,
+      "updated_at": 1795730100
+    },
+    {
+      "id": "dest_demo_dns",
+      "name": "Split DNS Check",
+      "target": "api.example.com",
+      "category": "Website & API",
+      "mac": "",
+      "default_check": "recipe_diff_dns",
+      "pinned": true,
+      "monitor_enabled": true,
+      "monitor_schedule": "*/5 * * * *",
+      "created_at": 1795640200,
+      "updated_at": 1795730200
+    },
+    {
+      "id": "dest_demo_canary",
+      "name": "Upstream Canary",
+      "target": "canary.example.net",
+      "category": "Remote",
+      "mac": "",
+      "default_check": "recipe_diff_ping",
+      "pinned": true,
+      "monitor_enabled": true,
+      "monitor_schedule": "*/5 * * * *",
+      "created_at": 1795640300,
+      "updated_at": 1795730300
+    },
+    {
+      "id": "dest_demo_nas",
+      "name": "Storage NAS-01",
+      "target": "192.0.2.10",
+      "category": "Servers & NAS",
+      "mac": "00:00:5E:00:53:10",
+      "default_check": "recipe_host_card",
+      "pinned": false,
+      "monitor_enabled": true,
+      "monitor_schedule": "*/5 * * * *",
+      "created_at": 1795640400,
+      "updated_at": 1795730400
+    },
+    {
+      "id": "dest_demo_ws02",
+      "name": "Workstation 02",
+      "target": "192.0.2.42",
+      "category": "LAN",
+      "mac": "00:00:5E:00:53:42",
+      "default_check": "recipe_wake_verify",
+      "pinned": false,
+      "monitor_enabled": false,
+      "monitor_schedule": "*/5 * * * *",
+      "created_at": 1795640500,
+      "updated_at": 1795730500
+    }
+  ],
+  "default_targets": {
+    "recipe_diff_ping": "canary.example.net",
+    "recipe_lan_radar": "192.0.2.0/24",
+    "recipe_path_autopsy": "198.51.100.44",
+    "recipe_diff_dns": "api.example.com",
+    "recipe_diff_http": "https://api.example.com/health",
+    "recipe_host_card": "192.0.2.10",
+    "recipe_diff_snapshot": "snap-20261126-1800",
+    "recipe_wake_verify": "192.0.2.42",
+    "render_run_digest": "30d",
+    "arp_neighbor_sweep": "192.0.2.0/24",
+    "mtu_path_probe": "canary.example.net",
+    "mtr_path_quality": "198.51.100.44",
+    "mdns_ssdp_discover": "192.0.2.0/24",
+    "split_dns_audit": "api.example.com",
+    "snmp_switch_port": "192.0.2.14",
+    "ping": "canary.example.net",
+    "traceroute": "203.0.113.8",
+    "http_ping": "https://api.example.com/health",
+    "tls_certificate_check": "api.example.com",
+    "resolve_hostname": "api.example.com",
+    "local_dns_query": "api.example.com",
+    "remote_dns_query": "api.example.com",
+    "tcp_port_scan": "192.0.2.10",
+    "whois_query": "example.net",
+    "dns_reverse_batch": "192.0.2.1,192.0.2.10,203.0.113.8",
+    "mac_vendor_lookup": "00:00:5E:00:53:10",
+    "wol_wake": "00:00:5E:00:53:42"
+  },
+  "default_run": {
+    "job_id": "job-20261126-224500-dp01",
+    "tool": "recipe_diff_ping",
+    "target": "canary.example.net",
+    "status": "OK",
+    "duration_ms": 14,
+    "summary": "All 4 path hops reachable with 0% loss; average end-to-end latency 14.2 ms.",
+    "created_at": "2026-11-26T22:45:00Z",
+    "expires_at": "2026-12-26T22:45:00Z",
+    "waterfall": [
+      { "label": "Local Adapter", "startMs": 0, "durationMs": 0.18 },
+      { "label": "Gateway", "startMs": 0.18, "durationMs": 0.64 },
+      { "label": "ISP Transit", "startMs": 0.82, "durationMs": 8.45 },
+      { "label": "Canary Edge", "startMs": 9.27, "durationMs": 4.93 },
+      { "label": "Total", "startMs": 0, "durationMs": 14.2, "isTotal": true }
+    ],
+    "whiskers": [
+      { "label": "[1] Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
+      { "label": "[2] Gateway (192.0.2.1)", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
+      { "label": "[3] ISP Transit", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
+      { "label": "[4] Canary Edge", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+    ]
+  },
+  "lan_inventory": {
+    "baseline_id": "snap-20261126-1800",
+    "current_id": "snap-20261126-2240",
+    "captured_at": "2026-11-26T22:40:00Z",
+    "physical": [
+      { "ip": "192.0.2.1", "hostname": "gw-core.example", "mac": "00:00:5E:00:53:01", "vendor": "IANA Documentation OUI", "segment": "uaa", "rtt_ms": 0.42, "open_ports": [22, 53, 443] },
+      { "ip": "192.0.2.10", "hostname": "nas-01.example", "mac": "00:00:5E:00:53:10", "vendor": "IANA Documentation OUI", "segment": "uaa", "rtt_ms": 0.68, "open_ports": [22, 443, 445, 9100] },
+      { "ip": "192.0.2.14", "hostname": "switch-core.example", "mac": "00:00:5E:00:53:14", "vendor": "IANA Documentation OUI", "segment": "uaa", "rtt_ms": 0.54, "open_ports": [22, 161, 443] },
+      { "ip": "192.0.2.21", "hostname": "edge-ap.example", "mac": "00:00:5E:00:53:21", "vendor": "IANA Documentation OUI", "segment": "uaa", "rtt_ms": 1.15, "open_ports": [22, 443] },
+      { "ip": "192.0.2.42", "hostname": "workstation-02.example", "mac": "00:00:5E:00:53:42", "vendor": "IANA Documentation OUI", "segment": "uaa", "rtt_ms": 0.89, "open_ports": [22] }
+    ],
+    "virtual": [
+      { "ip": "198.51.100.11", "hostname": "proxy-edge.container.example", "mac": "02:42:00:00:02:11", "vendor": "Container Bridge", "runtime": "Docker bridge", "segment": "laa", "rtt_ms": 0.24, "open_ports": [80, 443, 8443] },
+      { "ip": "198.51.100.12", "hostname": "metrics-db.container.example", "mac": "02:42:00:00:02:12", "vendor": "Container Bridge", "runtime": "Docker bridge", "segment": "laa", "rtt_ms": 0.29, "open_ports": [5432, 9090] },
+      { "ip": "198.51.100.24", "hostname": "vm-runner.example", "mac": "02:42:00:00:02:24", "vendor": "Virtual NIC", "runtime": "KVM virtio", "segment": "laa", "rtt_ms": 0.51, "open_ports": [22, 8080] }
+    ],
+    "snapshot_diff": {
+      "baseline_id": "snap-20261126-1800",
+      "current_id": "snap-20261126-2240",
+      "captured_at": "2026-11-26T22:40:00Z",
+      "added": ["198.51.100.24 (vm-runner.example) · 02:42:00:00:02:24 · ports 22, 8080"],
+      "removed": ["192.0.2.39 (bench-node.example) · 00:00:5E:00:53:39"],
+      "changed": ["192.0.2.10 (nas-01.example) · ports 22,443,445 -> 22,443,445,9100"]
+    }
+  },
+  "cron": {
+    "warmup": false,
+    "range": "30d",
+    "timeseries_by_range": {
+      "24h": [
+        { "ts": 1795651200, "label": "00:00", "avg_ms": 11.2, "max_ms": 16.8, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795658400, "label": "02:00", "avg_ms": 10.8, "max_ms": 15.9, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795665600, "label": "04:00", "avg_ms": 10.6, "max_ms": 15.4, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795672800, "label": "06:00", "avg_ms": 11.9, "max_ms": 18.2, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795680000, "label": "08:00", "avg_ms": 13.4, "max_ms": 24.5, "min_ms": 0.5, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795687200, "label": "10:00", "avg_ms": 15.1, "max_ms": 29.8, "min_ms": 0.5, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795694400, "label": "12:00", "avg_ms": 18.6, "max_ms": 42.1, "min_ms": 0.5, "ok_count": 11, "warn_count": 1, "fail_count": 0, "total_count": 12, "uptime_pct": 91.7, "status": "WARN" },
+        { "ts": 1795701600, "label": "14:00", "avg_ms": 14.2, "max_ms": 26.4, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795708800, "label": "16:00", "avg_ms": 13.9, "max_ms": 22.8, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795716000, "label": "18:00", "avg_ms": 24.8, "max_ms": 58.2, "min_ms": 0.5, "ok_count": 10, "warn_count": 1, "fail_count": 1, "total_count": 12, "uptime_pct": 83.3, "status": "FAIL" },
+        { "ts": 1795723200, "label": "20:00", "avg_ms": 16.4, "max_ms": 34.0, "min_ms": 0.4, "ok_count": 11, "warn_count": 1, "fail_count": 0, "total_count": 12, "uptime_pct": 91.7, "status": "WARN" },
+        { "ts": 1795730400, "label": "22:00", "avg_ms": 14.2, "max_ms": 25.1, "min_ms": 0.4, "ok_count": 12, "warn_count": 0, "fail_count": 0, "total_count": 12, "uptime_pct": 100.0, "status": "OK" }
+      ],
+      "7d": [
+        { "ts": 1795132800, "label": "11-20 00:00", "avg_ms": 11.4, "max_ms": 19.2, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795176000, "label": "11-20 12:00", "avg_ms": 12.6, "max_ms": 24.8, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795219200, "label": "11-21 00:00", "avg_ms": 11.1, "max_ms": 18.4, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795262400, "label": "11-21 12:00", "avg_ms": 11.8, "max_ms": 21.1, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795305600, "label": "11-22 00:00", "avg_ms": 10.9, "max_ms": 17.6, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795348800, "label": "11-22 12:00", "avg_ms": 12.1, "max_ms": 22.9, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795392000, "label": "11-23 00:00", "avg_ms": 11.5, "max_ms": 20.4, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795435200, "label": "11-23 12:00", "avg_ms": 13.7, "max_ms": 28.4, "min_ms": 0.4, "ok_count": 23, "warn_count": 1, "fail_count": 0, "total_count": 24, "uptime_pct": 95.8, "status": "WARN" },
+        { "ts": 1795478400, "label": "11-24 00:00", "avg_ms": 11.2, "max_ms": 18.8, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795521600, "label": "11-24 12:00", "avg_ms": 11.6, "max_ms": 21.0, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795564800, "label": "11-25 00:00", "avg_ms": 11.3, "max_ms": 19.6, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795608000, "label": "11-25 12:00", "avg_ms": 12.2, "max_ms": 24.2, "min_ms": 0.4, "ok_count": 24, "warn_count": 0, "fail_count": 0, "total_count": 24, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795651200, "label": "11-26 00:00", "avg_ms": 14.1, "max_ms": 31.8, "min_ms": 0.4, "ok_count": 23, "warn_count": 1, "fail_count": 0, "total_count": 24, "uptime_pct": 95.8, "status": "WARN" },
+        { "ts": 1795694400, "label": "11-26 12:00", "avg_ms": 22.4, "max_ms": 64.2, "min_ms": 0.4, "ok_count": 21, "warn_count": 2, "fail_count": 1, "total_count": 24, "uptime_pct": 87.5, "status": "FAIL" }
+      ],
+      "30d": [
+        { "ts": 1793232000, "label": "2026-10-28", "avg_ms": 11.2, "max_ms": 18.4, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1793404800, "label": "2026-10-30", "avg_ms": 11.5, "max_ms": 19.8, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1793577600, "label": "2026-11-01", "avg_ms": 10.9, "max_ms": 17.5, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1793750400, "label": "2026-11-03", "avg_ms": 11.8, "max_ms": 21.0, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1793836800, "label": "2026-11-04", "avg_ms": 18.4, "max_ms": 38.2, "min_ms": 0.4, "ok_count": 45, "warn_count": 3, "fail_count": 0, "total_count": 48, "uptime_pct": 93.8, "status": "WARN" },
+        { "ts": 1794009600, "label": "2026-11-06", "avg_ms": 11.0, "max_ms": 18.1, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1794182400, "label": "2026-11-08", "avg_ms": 11.6, "max_ms": 20.4, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1794355200, "label": "2026-11-10", "avg_ms": 11.4, "max_ms": 19.6, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1794528000, "label": "2026-11-12", "avg_ms": 11.1, "max_ms": 18.9, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1794700800, "label": "2026-11-14", "avg_ms": 11.7, "max_ms": 22.1, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1794873600, "label": "2026-11-16", "avg_ms": 10.8, "max_ms": 17.9, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795046400, "label": "2026-11-18", "avg_ms": 42.6, "max_ms": 118.4, "min_ms": 0.5, "ok_count": 42, "warn_count": 2, "fail_count": 4, "total_count": 48, "uptime_pct": 87.5, "status": "FAIL" },
+        { "ts": 1795219200, "label": "2026-11-20", "avg_ms": 11.2, "max_ms": 18.4, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795392000, "label": "2026-11-22", "avg_ms": 10.9, "max_ms": 17.8, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795564800, "label": "2026-11-24", "avg_ms": 11.1, "max_ms": 18.6, "min_ms": 0.4, "ok_count": 48, "warn_count": 0, "fail_count": 0, "total_count": 48, "uptime_pct": 100.0, "status": "OK" },
+        { "ts": 1795737600, "label": "2026-11-26", "avg_ms": 28.4, "max_ms": 64.2, "min_ms": 0.4, "ok_count": 44, "warn_count": 3, "fail_count": 1, "total_count": 48, "uptime_pct": 91.7, "status": "WARN" }
+      ]
+    },
+    "strip": [
+      { "label": "2026-11-17", "status": "OK", "detail": "48/48 checks OK · avg 11.3 ms", "avgMs": 11.3 },
+      { "label": "2026-11-18", "status": "FAIL", "detail": "relay-backup packet loss 25%", "avgMs": 42.6 },
+      { "label": "2026-11-19", "status": "OK", "detail": "48/48 checks OK · avg 11.9 ms", "avgMs": 11.9 },
+      { "label": "2026-11-20", "status": "OK", "detail": "48/48 checks OK · avg 11.2 ms", "avgMs": 11.2 },
+      { "label": "2026-11-21", "status": "OK", "detail": "48/48 checks OK · avg 11.0 ms", "avgMs": 11.0 },
+      { "label": "2026-11-22", "status": "OK", "detail": "48/48 checks OK · avg 10.9 ms", "avgMs": 10.9 },
+      { "label": "2026-11-23", "status": "OK", "detail": "48/48 checks OK · avg 11.4 ms", "avgMs": 11.4 },
+      { "label": "2026-11-24", "status": "OK", "detail": "48/48 checks OK · avg 11.1 ms", "avgMs": 11.1 },
+      { "label": "2026-11-25", "status": "OK", "detail": "48/48 checks OK · avg 11.3 ms", "avgMs": 11.3 },
+      { "label": "2026-11-26", "status": "WARN", "detail": "44/48 OK · relay-backup jitter spike", "avgMs": 28.4 }
+    ],
+    "watchlist": [
+      { "key": "gw-core", "target": "192.0.2.1 (gw-core.example)", "check": "ping", "health": "OK", "hysteresis": "Healthy", "avg_ms": 0.42, "max_ms": 0.91, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
+      { "key": "nas-01", "target": "192.0.2.10 (nas-01.example)", "check": "recipe_host_card", "health": "OK", "hysteresis": "Healthy", "avg_ms": 0.68, "max_ms": 1.32, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
+      { "key": "canary", "target": "canary.example.net", "check": "recipe_diff_ping", "health": "OK", "hysteresis": "Healthy", "avg_ms": 14.2, "max_ms": 19.8, "uptime_pct": 99.6, "last_tick": "2026-11-26T22:58:00Z" },
+      { "key": "api-http", "target": "https://api.example.com/health", "check": "recipe_diff_http", "health": "OK", "hysteresis": "Healthy", "avg_ms": 38.6, "max_ms": 51.4, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
+      { "key": "split-dns", "target": "api.example.com", "check": "recipe_diff_dns", "health": "OK", "hysteresis": "Healthy", "avg_ms": 11.4, "max_ms": 16.9, "uptime_pct": 100.0, "last_tick": "2026-11-26T22:58:00Z" },
+      { "key": "relay-bk", "target": "198.51.100.44 (relay-backup.example.net)", "check": "mtr_path_quality", "health": "WARN", "hysteresis": "Alert Active", "avg_ms": 28.4, "max_ms": 64.2, "uptime_pct": 88.2, "last_tick": "2026-11-26T22:58:00Z" }
+    ],
+    "jobs": [
+      {
+        "job_id": "job-20261126-224500-dp01",
+        "tool": "recipe_diff_ping",
+        "target": "canary.example.net",
+        "status": "OK",
+        "duration_ms": 14,
+        "summary": "All 4 path hops reachable with 0% loss; average end-to-end latency 14.2 ms.",
+        "created_at": "2026-11-26T22:45:00Z",
+        "expires_at": "2026-12-26T22:45:00Z",
+        "whiskers": [
+          { "label": "[1] Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
+          { "label": "[2] Gateway", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
+          { "label": "[3] ISP Transit", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
+          { "label": "[4] Canary Edge", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+        ],
+        "waterfall": [
+          { "label": "Local Adapter", "startMs": 0, "durationMs": 0.18 },
+          { "label": "Gateway", "startMs": 0.18, "durationMs": 0.64 },
+          { "label": "ISP Transit", "startMs": 0.82, "durationMs": 8.45 },
+          { "label": "Canary Edge", "startMs": 9.27, "durationMs": 4.93 },
+          { "label": "Total", "startMs": 0, "durationMs": 14.2, "isTotal": true }
+        ]
+      },
+      {
+        "job_id": "job-20261126-224000-lr02",
+        "tool": "recipe_lan_radar",
+        "target": "192.0.2.0/24",
+        "status": "OK",
+        "duration_ms": 64,
+        "summary": "Discovered 5 physical hardware devices and 3 containers/VMs on 192.0.2.0/24.",
+        "created_at": "2026-11-26T22:40:00Z",
+        "expires_at": "2026-12-26T22:40:00Z",
+        "whiskers": [
+          { "label": "gw-core.example", "minMs": 0.31, "avgMs": 0.42, "maxMs": 0.78, "lossPct": 0 },
+          { "label": "nas-01.example", "minMs": 0.51, "avgMs": 0.68, "maxMs": 1.12, "lossPct": 0 },
+          { "label": "switch-core.example", "minMs": 0.44, "avgMs": 0.54, "maxMs": 0.89, "lossPct": 0 },
+          { "label": "edge-ap.example", "minMs": 0.85, "avgMs": 1.15, "maxMs": 1.94, "lossPct": 0 }
+        ]
+      },
+      {
+        "job_id": "job-20261126-215800-pa03",
+        "tool": "recipe_path_autopsy",
+        "target": "198.51.100.44",
+        "status": "WARN",
+        "duration_ms": 78,
+        "summary": "Hop 3 jitter spike (28.4 ms avg, 64.2 ms peak, 5% packet loss); path packet limit 1420 bytes.",
+        "created_at": "2026-11-26T21:58:00Z",
+        "expires_at": "2026-12-26T21:58:00Z",
+        "whiskers": [
+          { "label": "Hop 1 (192.0.2.1)", "minMs": 0.31, "avgMs": 0.45, "maxMs": 0.82, "lossPct": 0 },
+          { "label": "Hop 2 (198.51.100.1)", "minMs": 6.8, "avgMs": 8.1, "maxMs": 11.4, "lossPct": 0 },
+          { "label": "Hop 3 (198.51.100.44)", "minMs": 18.2, "avgMs": 28.4, "maxMs": 64.2, "lossPct": 5 }
+        ]
+      },
+      {
+        "job_id": "job-20261126-193000-dh04",
+        "tool": "recipe_diff_http",
+        "target": "https://api.example.com/health",
+        "status": "OK",
+        "duration_ms": 39,
+        "summary": "HTTP 200 OK in 38.6 ms; TLSv1.3 certificate valid for 74 days.",
+        "created_at": "2026-11-26T19:30:00Z",
+        "expires_at": "2026-12-26T19:30:00Z",
+        "waterfall": [
+          { "label": "DNS Lookup", "startMs": 0, "durationMs": 4.1 },
+          { "label": "TCP Connect", "startMs": 4.1, "durationMs": 7.4 },
+          { "label": "TLS Handshake", "startMs": 11.5, "durationMs": 14.2 },
+          { "label": "First Byte", "startMs": 25.7, "durationMs": 12.9 },
+          { "label": "Total", "startMs": 0, "durationMs": 38.6, "isTotal": true }
+        ],
+        "tls_health": {
+          "valid": true,
+          "subject": "api.example.com",
+          "issuer": "Example Trust Root CA",
+          "days_remaining": 74,
+          "not_after": "2027-02-08T00:00:00Z",
+          "hostname_match": true,
+          "protocol": "TLSv1.3",
+          "cipher": "TLS_AES_256_GCM_SHA384"
+        }
+      },
+      {
+        "job_id": "job-20261125-181000-dd05",
+        "tool": "recipe_diff_dns",
+        "target": "api.example.com",
+        "status": "OK",
+        "duration_ms": 15,
+        "summary": "Local router DNS and public resolvers agree on 203.0.113.44.",
+        "created_at": "2026-11-25T18:10:00Z",
+        "expires_at": "2026-12-25T18:10:00Z",
+        "dns_comparisons": [
+          { "resolver": "Local Router DNS (A)", "latency_ms": 3.8, "answers": ["203.0.113.44"], "status": "MATCH", "match": true },
+          { "resolver": "Public DoH (A)", "latency_ms": 11.4, "answers": ["203.0.113.44"], "status": "MATCH", "match": true },
+          { "resolver": "System Resolver", "latency_ms": 2.9, "answers": ["203.0.113.44", "2001:db8::44"], "status": "OK", "match": true }
+        ]
+      },
+      {
+        "job_id": "job-20261124-142000-hc06",
+        "tool": "recipe_host_card",
+        "target": "192.0.2.10",
+        "status": "OK",
+        "duration_ms": 19,
+        "summary": "nas-01.example reachable in 0.68 ms with 4 open services (22, 443, 445, 9100).",
+        "created_at": "2026-11-24T14:20:00Z",
+        "expires_at": "2026-12-24T14:20:00Z",
+        "whiskers": [
+          { "label": "nas-01.example (192.0.2.10)", "minMs": 0.51, "avgMs": 0.68, "maxMs": 1.12, "lossPct": 0 }
+        ],
+        "tls_health": {
+          "valid": true,
+          "subject": "nas-01.example",
+          "issuer": "Example Internal CA",
+          "days_remaining": 118,
+          "not_after": "2027-03-24T00:00:00Z",
+          "hostname_match": true,
+          "protocol": "TLSv1.3",
+          "cipher": "TLS_AES_128_GCM_SHA256"
+        }
+      },
+      {
+        "job_id": "job-20261122-090000-ds07",
+        "tool": "recipe_diff_snapshot",
+        "target": "snap-20261126-1800",
+        "status": "OK",
+        "duration_ms": 46,
+        "summary": "Compared baseline snap-20261126-1800: 1 device added, 1 removed, 1 port change.",
+        "created_at": "2026-11-22T09:00:00Z",
+        "expires_at": "2026-12-22T09:00:00Z",
+        "waterfall": [
+          { "label": "Load Baseline", "startMs": 0, "durationMs": 2.4 },
+          { "label": "Network Sweep", "startMs": 2.4, "durationMs": 42.1 },
+          { "label": "Compute Changes", "startMs": 44.5, "durationMs": 1.3 },
+          { "label": "Total", "startMs": 0, "durationMs": 45.8, "isTotal": true }
+        ]
+      },
+      {
+        "job_id": "job-20261118-164500-mq08",
+        "tool": "mtr_path_quality",
+        "target": "198.51.100.44",
+        "status": "FAIL",
+        "duration_ms": 142,
+        "summary": "25% packet loss and 118.4 ms peak latency at Hop 3 (198.51.100.44).",
+        "created_at": "2026-11-18T16:45:00Z",
+        "expires_at": "2026-12-18T16:45:00Z",
+        "whiskers": [
+          { "label": "Hop 1 (192.0.2.1)", "minMs": 0.34, "avgMs": 0.48, "maxMs": 0.92, "lossPct": 0 },
+          { "label": "Hop 2 (198.51.100.1)", "minMs": 7.4, "avgMs": 9.1, "maxMs": 14.2, "lossPct": 0 },
+          { "label": "Hop 3 (198.51.100.44)", "minMs": 19.4, "avgMs": 42.6, "maxMs": 118.4, "lossPct": 25 }
+        ]
+      },
+      {
+        "job_id": "job-20261112-112000-pm09",
+        "tool": "mtu_path_probe",
+        "target": "canary.example.net",
+        "status": "OK",
+        "duration_ms": 33,
+        "summary": "Discovered maximum path packet size of 1420 bytes (tunnel headroom normal).",
+        "created_at": "2026-11-12T11:20:00Z",
+        "expires_at": "2026-12-12T11:20:00Z",
+        "waterfall": [
+          { "label": "1500B Probe", "startMs": 0, "durationMs": 6.4 },
+          { "label": "1350B Probe", "startMs": 6.4, "durationMs": 13.1 },
+          { "label": "1420B Verify", "startMs": 19.5, "durationMs": 13.8 }
+        ]
+      },
+      {
+        "job_id": "job-20261103-081500-rd10",
+        "tool": "render_run_digest",
+        "target": "30d",
+        "status": "OK",
+        "duration_ms": 5,
+        "summary": "96.7% 30-day uptime across 6 monitored targets; 1 active problem on relay-backup.",
+        "created_at": "2026-11-03T08:15:00Z",
+        "expires_at": "2026-12-03T08:15:00Z",
+        "waterfall": [
+          { "label": "Load History", "startMs": 0, "durationMs": 3.2 },
+          { "label": "Summarize", "startMs": 3.2, "durationMs": 1.6 }
+        ]
+      }
+    ]
+  },
+  "tool_runs": {
+    "recipe_diff_http": {
+      "status": "OK",
+      "duration_ms": 39,
+      "summary": "HTTP 200 OK in 38.6 ms; TLSv1.3 certificate valid for 74 days.",
+      "waterfall": [
+        { "label": "DNS Lookup", "startMs": 0, "durationMs": 4.1 },
+        { "label": "TCP Connect", "startMs": 4.1, "durationMs": 7.4 },
+        { "label": "TLS Handshake", "startMs": 11.5, "durationMs": 14.2 },
+        { "label": "First Byte", "startMs": 25.7, "durationMs": 12.9 },
+        { "label": "Total", "startMs": 0, "durationMs": 38.6, "isTotal": true }
+      ],
+      "tls_health": {
+        "valid": true,
+        "subject": "api.example.com",
+        "issuer": "Example Trust Root CA",
+        "days_remaining": 74,
+        "not_after": "2027-02-08T00:00:00Z",
+        "hostname_match": true,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_256_GCM_SHA384"
+      }
+    },
+    "http_ping": {
+      "status": "OK",
+      "duration_ms": 39,
+      "summary": "GET https://api.example.com/health returned 200 OK (38.6 ms average).",
+      "waterfall": [
+        { "label": "DNS Lookup", "startMs": 0, "durationMs": 4.1 },
+        { "label": "TCP Connect", "startMs": 4.1, "durationMs": 7.4 },
+        { "label": "TLS Handshake", "startMs": 11.5, "durationMs": 14.2 },
+        { "label": "First Byte", "startMs": 25.7, "durationMs": 12.9 },
+        { "label": "Total", "startMs": 0, "durationMs": 38.6, "isTotal": true }
+      ]
+    },
+    "tls_certificate_check": {
+      "status": "OK",
+      "duration_ms": 22,
+      "summary": "TLS certificate chain valid for api.example.com (expires in 74 days).",
+      "tls_health": {
+        "valid": true,
+        "subject": "api.example.com",
+        "issuer": "Example Trust Root CA",
+        "days_remaining": 74,
+        "not_after": "2027-02-08T00:00:00Z",
+        "hostname_match": true,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_256_GCM_SHA384"
+      }
+    },
+    "recipe_diff_dns": {
+      "status": "OK",
+      "duration_ms": 15,
+      "summary": "Local router DNS (3.8 ms) and public DoH (11.4 ms) agree on 203.0.113.44.",
+      "dns_comparisons": [
+        { "resolver": "Local Router DNS (A)", "latency_ms": 3.8, "answers": ["203.0.113.44"], "status": "MATCH", "match": true },
+        { "resolver": "Public DoH (A)", "latency_ms": 11.4, "answers": ["203.0.113.44"], "status": "MATCH", "match": true },
+        { "resolver": "System Resolver", "latency_ms": 2.9, "answers": ["203.0.113.44", "2001:db8::44"], "status": "OK", "match": true }
+      ]
+    },
+    "split_dns_audit": {
+      "status": "OK",
+      "duration_ms": 16,
+      "summary": "No split-DNS discrepancy detected for api.example.com.",
+      "dns_comparisons": [
+        { "resolver": "Local Router DNS (A)", "latency_ms": 3.8, "answers": ["203.0.113.44"], "status": "MATCH", "match": true },
+        { "resolver": "Public DoH (A)", "latency_ms": 11.4, "answers": ["203.0.113.44"], "status": "MATCH", "match": true },
+        { "resolver": "Local Router DNS (AAAA)", "latency_ms": 4.2, "answers": ["2001:db8::44"], "status": "MATCH", "match": true },
+        { "resolver": "Public DoH (AAAA)", "latency_ms": 12.1, "answers": ["2001:db8::44"], "status": "MATCH", "match": true }
+      ]
+    },
+    "recipe_host_card": {
+      "status": "OK",
+      "duration_ms": 24,
+      "summary": "192.0.2.10 reachable (0.68 ms avg), 4 open ports, valid internal TLS certificate.",
+      "whiskers": [{ "label": "nas-01.example", "minMs": 0.51, "avgMs": 0.68, "maxMs": 1.12, "lossPct": 0 }],
+      "tls_health": {
+        "valid": true,
+        "subject": "nas-01.example",
+        "issuer": "Example Internal CA",
+        "days_remaining": 118,
+        "not_after": "2027-03-24T00:00:00Z",
+        "hostname_match": true,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_128_GCM_SHA256"
+      },
+      "dns_comparisons": [
+        { "resolver": "System Resolver", "latency_ms": 1.4, "answers": ["192.0.2.10"], "status": "OK", "match": true }
+      ],
+      "data": { "mac": "00:00:5E:00:53:10", "open_ports": [22, 443, 445, 9100] }
+    },
+    "recipe_wake_verify": {
+      "status": "OK",
+      "duration_ms": 4200,
+      "summary": "Wake packet sent to 00:00:5E:00:53:42; device responded online in 4.2 s (0.89 ms ping).",
+      "waterfall": [
+        { "label": "Send Wake Packet", "startMs": 0, "durationMs": 12 },
+        { "label": "Device Boot / Link", "startMs": 12, "durationMs": 4180 },
+        { "label": "Confirm Online", "startMs": 4192, "durationMs": 8 },
+        { "label": "Total", "startMs": 0, "durationMs": 4200, "isTotal": true }
+      ],
+      "data": { "mac": "00:00:5E:00:53:42", "broadcast_ip": "192.0.2.255", "verified": true }
+    },
+    "wol_wake": {
+      "status": "OK",
+      "duration_ms": 12,
+      "summary": "Wake packet sent to 00:00:5E:00:53:42 via 192.0.2.255:9.",
+      "data": { "mac": "00:00:5E:00:53:42", "broadcast_ip": "192.0.2.255", "port": 9 }
+    },
+    "ping": {
+      "status": "OK",
+      "duration_ms": 14,
+      "summary": "4/4 replies received from canary.example.net (min 12.1 ms, avg 14.2 ms, max 19.8 ms).",
+      "whiskers": [{ "label": "canary.example.net", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }]
+    },
+    "traceroute": {
+      "status": "OK",
+      "duration_ms": 29,
+      "summary": "Reached 203.0.113.8 in 3 hops (14.2 ms final hop).",
+      "whiskers": [
+        { "label": "1: 192.0.2.1", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
+        { "label": "2: 198.51.100.1", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
+        { "label": "3: 203.0.113.8", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+      ]
+    },
+    "tcp_port_scan": {
+      "status": "OK",
+      "duration_ms": 34,
+      "summary": "4 open TCP ports found on 192.0.2.10: 22, 443, 445, 9100.",
+      "data": {
+        "target": "192.0.2.10",
+        "open_ports": [
+          { "port": 22, "service": "ssh", "latency_ms": 0.62 },
+          { "port": 443, "service": "https", "latency_ms": 0.74 },
+          { "port": 445, "service": "smb", "latency_ms": 0.81 },
+          { "port": 9100, "service": "metrics", "latency_ms": 0.68 }
+        ]
+      }
+    },
+    "arp_neighbor_sweep": {
+      "status": "OK",
+      "duration_ms": 48,
+      "summary": "Found 8 active local devices (5 physical hardware, 3 containers/VMs).",
+      "data": { "physical_count": 5, "virtual_count": 3, "subnet": "192.0.2.0/24" }
+    },
+    "mdns_ssdp_discover": {
+      "status": "OK",
+      "duration_ms": 55,
+      "summary": "Discovered 2 advertised local services (_ssh._tcp.local, _https._tcp.local).",
+      "data": {
+        "services": [
+          { "service": "_ssh._tcp.local", "host": "nas-01.example", "ip": "192.0.2.10", "port": 22 },
+          { "service": "_https._tcp.local", "host": "gw-core.example", "ip": "192.0.2.1", "port": 443 }
+        ]
+      }
+    },
+    "snmp_switch_port": {
+      "status": "OK",
+      "duration_ms": 18,
+      "summary": "Switch port Gi1/0/24 on 192.0.2.14 is UP at 1000 Mbps full-duplex with 0 errors.",
+      "data": { "port": "Gi1/0/24", "link": "UP", "speed_mbps": 1000, "rx_errors": 0, "tx_errors": 0 }
+    },
+    "resolve_hostname": {
+      "status": "OK",
+      "duration_ms": 3,
+      "summary": "api.example.com resolved to 203.0.113.44 and 2001:db8::44.",
+      "dns_comparisons": [{ "resolver": "System Resolver", "latency_ms": 3.2, "answers": ["203.0.113.44", "2001:db8::44"], "status": "OK", "match": true }]
+    },
+    "local_dns_query": {
+      "status": "OK",
+      "duration_ms": 4,
+      "summary": "Local router DNS (192.0.2.1) returned 203.0.113.44 in 3.8 ms.",
+      "dns_comparisons": [{ "resolver": "Local Router DNS (192.0.2.1)", "latency_ms": 3.8, "answers": ["203.0.113.44"], "status": "OK", "match": true }]
+    },
+    "remote_dns_query": {
+      "status": "OK",
+      "duration_ms": 11,
+      "summary": "Public DoH resolver (203.0.113.53) returned 203.0.113.44 in 11.4 ms.",
+      "dns_comparisons": [{ "resolver": "Public DoH (203.0.113.53)", "latency_ms": 11.4, "answers": ["203.0.113.44"], "status": "OK", "match": true }]
+    },
+    "dns_reverse_batch": {
+      "status": "OK",
+      "duration_ms": 9,
+      "summary": "3 of 3 IP addresses resolved to reverse PTR names.",
+      "dns_comparisons": [
+        { "resolver": "192.0.2.1", "latency_ms": 2.1, "answers": ["gw-core.example"], "status": "OK", "match": true },
+        { "resolver": "192.0.2.10", "latency_ms": 2.4, "answers": ["nas-01.example"], "status": "OK", "match": true },
+        { "resolver": "203.0.113.8", "latency_ms": 4.8, "answers": ["canary.example.net"], "status": "OK", "match": true }
+      ]
+    },
+    "whois_query": {
+      "status": "OK",
+      "duration_ms": 42,
+      "summary": "example.net registered under IANA Reserved Domains.",
+      "data": { "domain": "example.net", "registrar": "IANA Reserved Domains", "status": "reserved" }
+    },
+    "mac_vendor_lookup": {
+      "status": "OK",
+      "duration_ms": 2,
+      "summary": "00:00:5E:00:53:10 belongs to IANA RFC 7042 Documentation OUI (Physical Hardware).",
+      "data": { "mac": "00:00:5E:00:53:10", "assignment": "Physical Hardware (UAA)", "vendor": "IANA RFC 7042 Documentation" }
+    }
+  }
+}

@@ -1,0 +1,130 @@
+name: CI Verification
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test, Lint, Showcase & Docker Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run GolangCI-Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --config=golangci.yaml
+
+      - name: Run unit tests with race detector & enforce >= 80% coverage
+        run: |
+          set -euo pipefail
+          go test -race -coverprofile=coverage.out -covermode=atomic ./...
+          total_cov="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')"
+          echo "Total unit test coverage: ${total_cov}%"
+          awk -v cov="$total_cov" 'BEGIN {
+            if (cov + 0 < 80.0) {
+              printf "Coverage %.1f%% is below required 80.0%% threshold\n", cov
+              exit 1
+            }
+          }'
+
+      - name: Build static pure-Go binary (CGO_ENABLED=0)
+        run: |
+          CGO_ENABLED=0 GOOS=linux go build \
+            -ldflags="-s -w" \
+            -trimpath \
+            -tags netgo \
+            -o /tmp/mcp-adv-netutils \
+            .
+
+      - name: Validate server.json & showcase / Quiet UI checks
+        run: |
+          set -euo pipefail
+          python3 -m json.tool server.json > /dev/null
+          python3 scripts/build_github_showcase.py --check
+
+      - name: Smoke-test Docker --stdio JSON-RPC container
+        run: |
+          set -euo pipefail
+          IMAGE="mcp-adv-netutils:ci-test"
+          docker build -t "$IMAGE" .
+          docker image inspect "$IMAGE" --format='Image size: {{.Size}} bytes'
+          python3 - "$IMAGE" <<'PY'
+          import json, select, subprocess, sys, time
+          image = sys.argv[1]
+          reqs = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "ci-smoke", "version": "1.0"}}},
+              {"jsonrpc": "2.0", "method": "notifications/initialized"},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+              {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "mac_vendor_lookup", "arguments": {"mac": "00:00:5E:00:53:10"}}},
+          ]
+          proc = subprocess.Popen(
+              ["docker", "run", "--rm", "-i", image, "--stdio"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              text=True,
+          )
+          for req in reqs[:2]:
+              proc.stdin.write(json.dumps(req) + "\n")
+          proc.stdin.flush()
+          for req in reqs[2:]:
+              proc.stdin.write(json.dumps(req) + "\n")
+          proc.stdin.flush()
+          parsed = {}
+          deadline = time.monotonic() + 25.0
+          while len(parsed) < 3 and time.monotonic() < deadline:
+              ready, _, _ = select.select([proc.stdout], [], [], max(0.1, deadline - time.monotonic()))
+              if not ready:
+                  break
+              line = proc.stdout.readline()
+              if not line:
+                  break
+              if line.strip():
+                  msg = json.loads(line)
+                  assert msg.get("jsonrpc") == "2.0", msg
+                  if "id" in msg:
+                      parsed[msg["id"]] = msg
+          proc.stdin.close()
+          stderr = proc.stderr.read()
+          assert proc.wait(timeout=15) == 0, stderr
+          assert set(parsed.keys()) >= {1, 2, 3}, (parsed, stderr)
+          assert "result" in parsed[1], parsed[1]
+          tools = parsed[2]["result"]["tools"]
+          assert len(tools) > 0, parsed[2]
+          tool_names = {t["name"] for t in tools}
+          assert "mac_vendor_lookup" in tool_names, tool_names
+          call_res = parsed[3]["result"]
+          assert not call_res.get("isError", False), call_res
+          text_out = call_res["content"][0]["text"]
+          assert len(text_out.strip()) > 0, call_res
+          print(f"Docker ci-smoke stdio test OK ({len(tools)} tools)")
+          PY

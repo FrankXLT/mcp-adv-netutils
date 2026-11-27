@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="white" data-density="d2" data-corners="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Advanced Network Utilities — Network Studio</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231D4ED8'/%3E%3Ccircle cx='32' cy='32' r='10' fill='none' stroke='%23FFF' stroke-width='4'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./vendor/quiet-evidence-bundle.css">
+  <link rel="stylesheet" href="./tokens.css">
+  <link rel="stylesheet" href="./studio.css">
+  <script defer src="./vendor/echarts.min.js"></script>
+  <script defer src="./vendor/quiet-evidence-bundle.js"></script>
+  <script defer src="./charts.js"></script>
+  <script defer src="./studio_destinations.js"></script>
+  <script defer src="./studio_results.js"></script>
+  <script defer src="./studio.js"></script>
+</head>
+<body>
+  <header class="va-shell-topbar">
+    <div class="va-shell-brand topbar-brand">
+      <svg class="brand-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.5"></circle><circle cx="5" cy="18" r="2.5"></circle><circle cx="19" cy="18" r="2.5"></circle><line x1="10.7" y1="7.2" x2="6.3" y2="15.8"></line><line x1="13.3" y1="7.2" x2="17.7" y2="15.8"></line><line x1="7.5" y1="18" x2="16.5" y2="18"></line></svg>
+      <span class="brand-title">Network Studio</span>
+      <span id="deadboltPill" class="va-pill deadbolt-pill" data-variant="status" data-state="fault">LOCKED</span>
+    </div>
+    <nav class="topbar-tabs-nav" aria-label="Studio Sections">
+      <div id="studioTabs" class="va-tab-strip va-tabs" role="tablist" aria-label="Workspace Views">
+        <button id="tabBtnChecks" class="va-tab" type="button" role="tab" aria-selected="true" data-tab="checks" tabindex="0">Checks</button>
+        <button id="tabBtnLan" class="va-tab" type="button" role="tab" aria-selected="false" data-tab="lan" tabindex="-1">Local Network</button>
+        <button id="tabBtnHistory" class="va-tab" type="button" role="tab" aria-selected="false" data-tab="history" tabindex="-1">Schedule &amp; History</button>
+      </div>
+    </nav>
+    <div class="va-shell-actions topbar-utilities">
+      <div class="utility-control">
+        <label for="themeSelect" class="va-sr-only">Color Theme</label>
+        <select id="themeSelect" class="va-select va-select-compact">
+          <option value="white">Pure White</option><option value="paper">Warm Paper</option>
+          <option value="dark-paper">Dark Paper</option><option value="dark">Dark</option>
+        </select>
+      </div>
+      <div id="densityToggle" class="va-toolbar-joined va-tb-group va-segmented" role="group" aria-label="Display Density">
+        <button id="densityCompactBtn" class="va-tb-btn va-seg-btn" type="button" data-density="d3" aria-pressed="false">Compact</button>
+        <button id="densityComfortBtn" class="va-tb-btn va-seg-btn" type="button" data-density="d2" aria-pressed="true">Comfortable</button>
+      </div>
+      <button id="lockModeBtn" class="va-btn va-btn-ghost va-btn-sm" type="button" data-action="demo">Demo</button>
+    </div>
+  </header>
+
+  <section id="lockGateSection" class="lock-gate" aria-labelledby="lockGateTitle">
+    <div class="va-card lock-gate-card">
+      <div class="lock-gate-header">
+        <svg class="lock-gate-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path><circle cx="12" cy="16" r="1"></circle></svg>
+        <div>
+          <h1 id="lockGateTitle" class="lock-gate-title">Network Studio Locked</h1>
+          <p class="lock-gate-subtitle">Enter the operator passphrase to run live checks, inspect connected devices, and view saved history.</p>
+        </div>
+      </div>
+      <form id="unlockForm" class="lock-form" novalidate>
+        <div class="va-field">
+          <label for="passphraseInput" class="va-label">Operator Passphrase</label>
+          <span id="passphraseHint" class="va-field-hint">Starts a short-lived studio session for live network tools.</span>
+          <input id="passphraseInput" name="passphrase" class="va-input" type="password" autocomplete="current-password" required aria-describedby="passphraseHint passphraseError" aria-invalid="false" data-error="passphraseError">
+          <span id="passphraseError" class="va-field-error" role="alert" aria-live="polite"></span>
+        </div>
+        <div class="lock-actions">
+          <button id="unlockSubmitBtn" class="va-btn va-btn-primary" type="submit" aria-busy="false">Unlock Studio</button>
+          <a id="openDemoLink" class="va-btn va-btn-secondary" href="?demo=1">Open Sample Demo</a>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <main id="studioMain" class="va-stage studio-main" hidden>
+    <div id="demoBanner" class="va-banner demo-banner" role="status" hidden>
+      <div class="banner-body">
+        <svg class="banner-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="10" x2="12" y2="16"></line><circle cx="12" cy="7" r="0.5" fill="currentColor"></circle></svg>
+        <span id="demoBannerText">Sample Workspace — Offline Demo Data</span>
+      </div>
+      <a id="exitDemoLink" class="va-btn va-btn-ghost va-btn-sm" href="./">Return to Live Mode</a>
+    </div>
+
+    <section class="va-kpi-grid kpi-strip" aria-label="Network Status Summary">
+      <button id="kpiUptimeCard" type="button" class="va-kpi-gauge-card kpi-action-card" aria-label="24h Uptime % — jump to Scheduled Checks">
+        <span class="kpi-head">
+          <span class="kpi-label kpi-label-nowrap">24h Uptime %</span>
+          <span id="kpiUptimeVal" class="kpi-value tabular-nums">—</span>
+        </span>
+        <span id="kpiUptimeProgress" class="va-kpi-gauge-track" role="progressbar" aria-label="24-hour Uptime Percentage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <svg class="va-kpi-gauge-svg" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true"><rect class="va-kpi-gauge-bg" x="0" y="0" width="100" height="6" rx="3"></rect><rect id="kpiUptimeBar" class="va-kpi-gauge-fill" x="0" y="0" width="0" height="6" rx="3"></rect></svg>
+        </span>
+        <span id="kpiUptimeMeta" class="kpi-meta tabular-nums">No scheduled checks yet</span>
+      </button>
+      <button id="kpiProblemsCard" type="button" class="va-kpi-card kpi-action-card" aria-label="Active Problems — jump to Scheduled Checks">
+        <span class="kpi-label">Active Problems</span>
+        <span id="kpiProblemsVal" class="kpi-value tabular-nums">—</span>
+        <span id="kpiProblemsMeta" class="kpi-meta">No active issues</span>
+      </button>
+      <button id="kpiDestinationsCard" type="button" class="va-kpi-card kpi-action-card" aria-label="Saved Destinations — jump to Saved Destinations manager">
+        <span class="kpi-label">Saved Destinations</span>
+        <span id="kpiDestinationsVal" class="kpi-value tabular-nums">—</span>
+        <span id="kpiDestinationsMeta" class="kpi-meta tabular-nums">0 pinned · 0 monitored</span>
+      </button>
+      <button id="kpiHistoryCard" type="button" class="va-kpi-card kpi-action-card" aria-label="Saved History Size — jump to Past Check Runs">
+        <span class="kpi-label">Saved History Size</span>
+        <span id="kpiHistorySizeVal" class="kpi-value kpi-value-compact tabular-nums">—</span>
+        <span id="kpiHistorySizeMeta" class="kpi-meta tabular-nums">0 saved runs (30d limit)</span>
+      </button>
+    </section>
+
+    <section id="panelChecks" class="studio-panel" role="tabpanel" aria-labelledby="tabBtnChecks">
+      <div id="pinnedBarCard" class="va-card pinned-bar-card">
+        <div class="pinned-bar-row">
+          <div class="pinned-bar-left">
+            <h2 class="pinned-bar-title">Pinned Destinations</h2>
+            <div id="pinnedList" class="pinned-pills-wrap" role="group" aria-label="Pinned Destinations"></div>
+          </div>
+          <div class="pinned-bar-actions">
+            <button id="topAddDestBtn" class="va-btn va-btn-secondary va-btn-sm" type="button">+ Add Destination</button>
+            <button id="scanPinnedBtn" class="va-btn va-btn-primary va-btn-sm" type="button" aria-busy="false">Scan Pinned</button>
+          </div>
+        </div>
+        <div id="pinnedSweepSummary" class="pinned-sweep-strip" hidden aria-live="polite"></div>
+      </div>
+
+      <div class="studio-split checks-grid">
+        <div class="checks-left-col">
+          <div class="va-card check-form-card">
+            <div class="card-header-row">
+              <h2 class="card-title">Run a Check</h2>
+              <span class="card-meta">Choose a goal, check type &amp; destination</span>
+            </div>
+            <div id="goalFilterGroup" class="va-toolbar-joined va-tb-group va-segmented goal-filter-group" role="group" aria-label="Check Goal">
+              <button class="va-tb-btn va-seg-btn" type="button" data-goal="path" aria-pressed="true">Path &amp; Ping</button>
+              <button class="va-tb-btn va-seg-btn" type="button" data-goal="web" aria-pressed="false">Web &amp; DNS</button>
+              <button class="va-tb-btn va-seg-btn" type="button" data-goal="ports" aria-pressed="false">Ports &amp; Host</button>
+              <button class="va-tb-btn va-seg-btn" type="button" data-goal="wake" aria-pressed="false">Wake</button>
+            </div>
+            <form id="checkForm" class="check-form" novalidate>
+              <div class="va-field">
+                <label for="checkSelect" class="va-label">Check Type</label>
+                <select id="checkSelect" name="tool" class="va-select"></select>
+              </div>
+              <div class="va-field">
+                <label for="targetInput" class="va-label">Destination Host, IP, or URL</label>
+                <input id="targetInput" name="target" class="va-input" type="text" placeholder="canary.example.net" autocomplete="off" spellcheck="false" required aria-describedby="targetHint targetError" aria-invalid="false" data-error="targetError">
+                <span id="targetHint" class="va-field-hint">Compare latency from local adapter, gateway, ISP, and destination.</span>
+                <span id="targetError" class="va-field-error" role="alert" aria-live="polite"></span>
+              </div>
+              <div id="portsWrap" class="context-param-group" hidden>
+                <div class="va-field">
+                  <label for="portsPresetSelect" class="va-label">Port Group</label>
+                  <select id="portsPresetSelect" name="ports" class="va-select">
+                    <option value="">Default Common Ports</option><option value="22,80,443">Core (22, 80, 443)</option>
+                    <option value="22,53,80,443,8080,8443">Infrastructure (22, 53, 80, 443, 8080, 8443)</option>
+                    <option value="80,443,3000,5000,8000,8080,8443">Web Services (80..8443)</option><option value="custom">Custom Ports...</option>
+                  </select>
+                </div>
+                <div id="customPortsWrap" class="va-field" hidden>
+                  <label for="customPortsInput" class="va-label">Custom Ports (comma-separated)</label>
+                  <input id="customPortsInput" name="customPorts" class="va-input" type="text" placeholder="22,80,443,5432" autocomplete="off" spellcheck="false">
+                </div>
+              </div>
+              <div id="wakeMacWrap" class="context-param-group" hidden>
+                <div class="va-field">
+                  <label for="wakeMacInput" class="va-label">Device MAC Address</label>
+                  <input id="wakeMacInput" name="mac" class="va-input" type="text" placeholder="00:00:5E:00:53:42" autocomplete="off" spellcheck="false" aria-describedby="wakeMacHint wakeMacError" aria-invalid="false" data-error="wakeMacError">
+                  <span id="wakeMacHint" class="va-field-hint">Select a saved device below or enter a 6-pair MAC address.</span>
+                  <span id="wakeMacError" class="va-field-error" role="alert" aria-live="polite"></span>
+                </div>
+                <div id="wakeMacChips" class="wake-mac-chips" role="group" aria-label="Saved Wake Devices"></div>
+              </div>
+              <div class="check-submit-row">
+                <button id="saveCurrentDestBtn" class="va-btn va-btn-secondary" type="button">Save Destination</button>
+                <button id="runCheckBtn" class="va-btn va-btn-primary" type="submit" aria-busy="false">Run Check</button>
+              </div>
+            </form>
+            <div class="check-card-footer">
+              <button id="jumpToLanBtn" class="quiet-jump-link" type="button">Scan a full subnet in Local Network &rarr;</button>
+            </div>
+          </div>
+
+          <section id="quickSavedDestsCard" class="va-card quick-saved-card" aria-labelledby="quickSavedTitle">
+            <div class="card-header-row">
+              <div><h2 id="quickSavedTitle" class="card-title">Saved Destinations</h2><span id="quickSavedCount" class="card-meta tabular-nums">0 saved</span></div>
+              <button id="quickSavedManageBtn" class="va-btn va-btn-ghost va-btn-xs" type="button">Manage all</button>
+            </div>
+            <p id="quickSavedEmpty" class="va-field-hint" hidden>No saved destinations yet. Click + Add Destination above to save a target.</p>
+            <ul id="quickSavedList" class="quick-saved-list"></ul>
+          </section>
+        </div>
+
+        <article id="checkResultCard" class="va-figure-card run-result-card" tabindex="-1" aria-labelledby="runResultCheckName">
+          <div class="va-figure-hdr result-verdict-hdr">
+            <div class="verdict-left">
+              <span id="runStatusBadge" class="va-pill" data-variant="status" data-state="nominal">[IDLE]</span>
+              <h2 id="runResultCheckName" class="card-title">Ready to Check</h2>
+            </div>
+            <div class="verdict-meta tabular-nums"><code id="runResultTarget" class="verdict-target">—</code><span id="runResultDuration" class="verdict-duration">—</span></div>
+          </div>
+          <p id="runResultSummary" class="result-summary-line">Choose a pinned destination or run a check to see latency charts, TLS status, and exportable tables.</p>
+          <div class="va-card-actions">
+            <div class="va-chart-table-switch" role="group" aria-label="Result Display Mode">
+              <button class="va-seg-btn is-active" type="button" data-qe-view="chart" aria-pressed="true">Chart</button>
+              <button class="va-seg-btn" type="button" data-qe-view="table" aria-pressed="false">Table</button>
+            </div>
+            <div class="va-copy-group">
+              <button class="va-action-btn" type="button" data-qe-copy="ai">Copy Summary</button>
+              <button class="va-action-btn" type="button" data-qe-copy="data">Copy Data</button>
+              <span class="va-copy-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <div class="va-card-chart-panel">
+            <div id="tlsHealthStrip" class="tls-health-strip" hidden aria-label="TLS Certificate Status"></div>
+            <div id="runChartsGrid" class="run-charts-grid">
+              <div id="runWhiskersWrap" class="chart-panel" hidden><h3 class="chart-title">Path Latency &amp; Packet Loss</h3><div id="runWhiskersHost" class="echart-host" role="img" aria-label="Path latency and packet loss chart"></div></div>
+              <div id="runWaterfallWrap" class="chart-panel" hidden><h3 class="chart-title">Response Timing Breakdown</h3><div id="runWaterfallHost" class="echart-host" role="img" aria-label="Response timing breakdown chart"></div></div>
+              <div id="runDnsWrap" class="chart-panel" hidden>
+                <h3 class="chart-title">DNS Resolver Comparison</h3>
+                <div id="runDnsHost" class="echart-host echart-host-sm" role="img" aria-label="DNS resolver latency comparison chart"></div>
+                <div id="runDnsTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="DNS Consensus Table" tabindex="0"></div>
+              </div>
+              <div id="runSummaryVisual" class="chart-panel">
+                <p id="runVisualEmptyText" class="chart-empty">Run any check to view interactive latency whiskers, timing waterfalls, or DNS comparisons.</p>
+                <dl id="runFactsGrid" class="facts-grid" hidden></dl>
+              </div>
+            </div>
+          </div>
+          <div class="va-card-table-panel" hidden="until-found">
+            <div class="va-table-scroll va-table-wrap" role="region" aria-label="Check Data Table" tabindex="0">
+              <table id="runResultTable" class="va-data-table"><thead id="runResultTableHead"></thead><tbody id="runResultTableBody"></tbody></table>
+            </div>
+          </div>
+          <script type="application/json" id="runExportPayload" class="qe-export-payload">{"markdown":"","tsv":""}</script>
+        </article>
+      </div>
+
+      <section id="savedDestinationsSection" class="va-card destinations-section" tabindex="-1" aria-labelledby="savedDestTitle">
+        <div class="card-header-row">
+          <div><h2 id="savedDestTitle" class="card-title">Saved Destinations</h2><span id="savedDestCount" class="card-meta tabular-nums">0 destinations</span></div>
+          <button id="addDestinationBtn" class="va-btn va-btn-primary va-btn-sm" type="button">+ Add Destination</button>
+        </div>
+        <div id="savedDestEmpty" class="va-empty-state" data-kind="empty" hidden>
+          <p class="empty-state-title">No saved destinations yet.</p>
+          <p class="va-field-hint">Save frequent targets to pin 1-click checks and schedule automatic 5-minute monitoring.</p>
+          <button id="emptyAddDestBtn" class="va-btn va-btn-secondary va-btn-sm" type="button">Add First Destination</button>
+        </div>
+        <div id="savedDestTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="Saved Destinations" tabindex="0">
+          <table id="savedDestTable" class="va-data-table">
+            <thead><tr><th>Destination</th><th>Default Check</th><th>Pinned</th><th>5-Min Monitor</th><th>Actions</th></tr></thead>
+            <tbody id="savedDestBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="panelLan" class="studio-panel" role="tabpanel" aria-labelledby="tabBtnLan" hidden="until-found">
+      <div class="va-card lan-toolbar-card">
+        <div class="lan-filter-group">
+          <label for="lanFilterInput" class="va-label">Search devices by name, IP, MAC, or vendor (or subnet CIDR)</label>
+          <input id="lanFilterInput" class="va-input" type="search" placeholder="Filter IP, host, MAC, vendor, or CIDR" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="lanSegmentGroup" class="va-toolbar-joined va-tb-group va-segmented" role="group" aria-label="Device Category Filter">
+          <button class="va-tb-btn va-seg-btn" type="button" data-segment="all" aria-pressed="true">All</button>
+          <button class="va-tb-btn va-seg-btn" type="button" data-segment="uaa" aria-pressed="false">Physical Hardware</button>
+          <button class="va-tb-btn va-seg-btn" type="button" data-segment="laa" aria-pressed="false">Containers &amp; VMs</button>
+          <button class="va-tb-btn va-seg-btn" type="button" data-segment="changed" aria-pressed="false">Changed vs. Baseline</button>
+        </div>
+        <div id="baselineWrap" class="lan-baseline-wrap">
+          <div class="va-field">
+            <label for="baselineSelect" class="va-label">Compare Baseline</label>
+            <select id="baselineSelect" name="baselineSelect" class="va-select va-select-compact">
+              <option value="">Current / Auto Baseline</option><option value="custom">Custom Snapshot ID...</option>
+            </select>
+          </div>
+          <div id="customBaselineWrap" class="va-field" hidden>
+            <label for="baselineInput" class="va-label">Baseline Snapshot ID</label>
+            <input id="baselineInput" name="baseline" class="va-input" type="text" placeholder="snap-20261126-1800" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div class="lan-actions">
+          <button id="lanRadarBtn" class="va-btn va-btn-primary" type="button" aria-busy="false">Scan Network</button>
+          <button id="saveSnapshotBtn" class="va-btn va-btn-secondary" type="button">Save Baseline</button>
+          <button id="diffSnapshotBtn" class="va-btn va-btn-secondary" type="button">Compare Baseline</button>
+        </div>
+      </div>
+      <div id="lanEmptyState" class="va-card va-empty-state" data-kind="filtered" hidden>
+        <p id="lanEmptyMessage" class="empty-state-title">No local network devices match the active filter.</p>
+        <button id="lanClearFiltersBtn" class="va-btn va-btn-secondary" type="button">Reset Filters</button>
+      </div>
+      <div id="lanTableWrap" class="va-card lan-table-container">
+        <div class="lan-group-section" data-segment-section="uaa">
+          <div class="lan-group-header"><span class="va-pill" data-variant="tag">Physical Hardware</span><span id="lanPhysicalCount" class="card-meta tabular-nums">0 devices</span></div>
+          <div class="va-table-scroll va-table-wrap" role="region" aria-label="Physical Hardware Devices" tabindex="0">
+            <table id="lanPhysicalTable" class="va-data-table lan-table">
+              <thead><tr><th>IP Address</th><th>Device Name</th><th>MAC Address</th><th>Vendor</th><th>Response &amp; Open Ports</th><th>Actions</th></tr></thead>
+              <tbody id="lanPhysicalBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="lan-group-section" data-segment-section="laa">
+          <div class="lan-group-header"><span class="va-pill" data-variant="tag">Containers &amp; VMs</span><span id="lanVirtualCount" class="card-meta tabular-nums">0 devices</span></div>
+          <div class="va-table-scroll va-table-wrap" role="region" aria-label="Container and VM Devices" tabindex="0">
+            <table id="lanVirtualTable" class="va-data-table lan-table">
+              <thead><tr><th>IP Address</th><th>Device Name</th><th>MAC Address</th><th>Runtime / Vendor</th><th>Response &amp; Open Ports</th><th>Actions</th></tr></thead>
+              <tbody id="lanVirtualBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <section id="snapshotDiffPanel" class="va-card snapshot-diff-panel" aria-labelledby="snapshotDiffTitle" hidden>
+        <div class="card-header-row"><h2 id="snapshotDiffTitle" class="card-title">Changes vs. Baseline</h2><span id="snapshotDiffMeta" class="card-meta tabular-nums"></span></div>
+        <div class="diff-buckets-grid">
+          <div class="diff-bucket diff-bucket--added"><h3 class="diff-bucket-title">Added <span id="diffAddedCount" class="tabular-nums">0</span></h3><ul id="diffAddedList" class="diff-list"></ul></div>
+          <div class="diff-bucket diff-bucket--removed"><h3 class="diff-bucket-title">Removed <span id="diffRemovedCount" class="tabular-nums">0</span></h3><ul id="diffRemovedList" class="diff-list"></ul></div>
+          <div class="diff-bucket diff-bucket--changed"><h3 class="diff-bucket-title">Changed <span id="diffChangedCount" class="tabular-nums">0</span></h3><ul id="diffChangedList" class="diff-list"></ul></div>
+        </div>
+      </section>
+    </section>
+
+    <section id="panelHistory" class="studio-panel" role="tabpanel" aria-labelledby="tabBtnHistory" hidden="until-found">
+      <div class="va-card cron-toolbar-card">
+        <div id="historyRangeGroup" class="va-toolbar-joined va-tb-group va-segmented" role="group" aria-label="History Time Range">
+          <button class="va-tb-btn va-seg-btn" type="button" data-range="24h" aria-pressed="false">24h</button>
+          <button class="va-tb-btn va-seg-btn" type="button" data-range="7d" aria-pressed="false">7d</button>
+          <button class="va-tb-btn va-seg-btn" type="button" data-range="30d" aria-pressed="true">30d</button>
+        </div>
+        <button id="refreshHistoryBtn" class="va-btn va-btn-secondary" type="button">Refresh History</button>
+      </div>
+      <div id="historyWarmupBanner" class="va-banner warmup-banner" role="status" hidden>
+        <div class="banner-body">
+          <svg class="banner-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15.5 14"></polyline></svg>
+          <span id="historyWarmupText">Warming up — 0 checks collected</span>
+        </div>
+      </div>
+      <div class="va-card history-timeline-card">
+        <div class="card-header-row"><h2 class="card-title">Response Time &amp; Health Timeline</h2><span id="historySampleMeta" class="card-meta tabular-nums">0 checks</span></div>
+        <div id="historyTimelineHost" class="echart-host echart-host-tall" role="img" aria-label="Scheduled response time and health timeline"></div>
+      </div>
+      <div id="cronHealthCard" class="va-card cron-health-card" tabindex="-1">
+        <div class="card-header-row"><h2 class="card-title">Scheduled Checks &amp; Destination Uptime</h2><span class="card-meta">5-minute automated monitoring</span></div>
+        <div id="watchlistEmptyState" class="va-empty-state" data-kind="empty" hidden>
+          <p class="empty-state-title">No automated 5-minute checks enabled yet.</p>
+          <p class="va-field-hint">Enable 5-minute monitoring on any saved destination to track uptime trends and alert after 2 failed checks.</p>
+          <button id="enableMonitoringBtn" class="va-btn va-btn-primary va-btn-sm" type="button">+ Enable 5-Min Monitoring</button>
+        </div>
+        <div id="watchlistTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="Scheduled Checks" tabindex="0">
+          <table id="watchlistTable" class="va-data-table">
+            <thead><tr><th>Destination</th><th>Check</th><th>Status</th><th>Uptime &amp; Trend</th><th>Avg / Peak Time</th><th>Last Checked</th></tr></thead>
+            <tbody id="watchlistBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="jobArchiveCard" class="va-card job-archive-card" tabindex="-1">
+        <div class="card-header-row"><h2 class="card-title">Past Check Runs</h2><span id="jobArchiveCount" class="card-meta tabular-nums">0 runs</span></div>
+        <div id="jobArchiveEmpty" class="va-empty-state" data-kind="empty" hidden>
+          <p class="empty-state-title">No past check runs recorded yet.</p>
+          <p class="va-field-hint">Run any check from Checks or Local Network to inspect historical latency charts and side-by-side comparisons.</p>
+          <button id="archiveRunCheckBtn" class="va-btn va-btn-secondary va-btn-sm" type="button">Run a Check</button>
+        </div>
+        <div id="jobArchiveTableWrap" class="va-table-scroll va-table-wrap" role="region" aria-label="Past Check Runs" tabindex="0">
+          <table id="jobArchiveTable" class="va-data-table">
+            <thead><tr><th>Run</th><th>Check</th><th>Destination</th><th>Status</th><th>Summary</th><th>Recorded</th></tr></thead>
+            <tbody id="jobArchiveBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav id="mobileNavDock" class="va-nav-dock va-shell-bottomdock" aria-label="Mobile Navigation">
+    <button class="va-dock-btn" type="button" data-tab="checks" aria-pressed="true"><svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>Checks</span></button>
+    <button class="va-dock-btn" type="button" data-tab="lan" aria-pressed="false"><svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M17 3h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M10 15h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z M5 9v3h14V9 M12 12v3"></path></svg><span>Local Network</span></button>
+    <button class="va-dock-btn" type="button" data-tab="history" aria-pressed="false"><svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 15"></polyline></svg><span>History</span></button>
+  </nav>
+
+  <dialog id="jobDrawer" class="va-modal-sheet" closedby="any" aria-labelledby="jobDrawerTitle">
+    <div class="va-modal-sheet-hdr modal-header">
+      <h1 id="jobDrawerTitle" class="modal-title">Past Check Run</h1>
+      <button id="jobDrawerCloseBtn" class="va-btn va-btn-ghost va-btn-sm" type="button" autofocus aria-label="Close past run drawer">Close</button>
+    </div>
+    <div class="va-modal-sheet-body modal-body">
+      <div id="jobDrawerMeta" class="modal-meta tabular-nums"></div>
+      <p id="jobDrawerSummary" class="result-summary-line"></p>
+      <article id="jobDrawerResultCard" class="va-figure-card">
+        <div class="va-card-actions">
+          <div class="va-chart-table-switch" role="group" aria-label="Past Run Display Mode">
+            <button class="va-seg-btn is-active" type="button" data-qe-view="chart" aria-pressed="true">Chart</button>
+            <button class="va-seg-btn" type="button" data-qe-view="table" aria-pressed="false">Table</button>
+          </div>
+          <div class="va-copy-group">
+            <button class="va-action-btn" type="button" data-qe-copy="ai">Copy Summary</button>
+            <button class="va-action-btn" type="button" data-qe-copy="data">Copy Data</button>
+            <span class="va-copy-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="va-card-chart-panel">
+          <div id="jobDrawerTlsStrip" class="tls-health-strip" hidden></div>
+          <div id="jobDrawerChartsHost" class="run-charts-grid"></div>
+        </div>
+        <div class="va-card-table-panel" hidden="until-found">
+          <div class="va-table-scroll va-table-wrap" role="region" aria-label="Past Run Data Table" tabindex="0"><table class="va-data-table"><thead id="jobDrawerTableHead"></thead><tbody id="jobDrawerTableBody"></tbody></table></div>
+        </div>
+        <script type="application/json" id="jobDrawerExportPayload" class="qe-export-payload">{"markdown":"","tsv":""}</script>
+      </article>
+      <section id="jobDrawerComparePanel" class="compare-panel" hidden aria-labelledby="jobDrawerCompareTitle">
+        <div class="card-header-row"><h2 id="jobDrawerCompareTitle" class="chart-title">Side-by-Side Comparison (Past vs. Now)</h2><span id="jobDrawerCompareDelta" class="va-pill" data-variant="status" data-state="nominal"></span></div>
+        <div class="va-table-scroll va-table-wrap" role="region" aria-label="Run Comparison Table" tabindex="0">
+          <table class="va-data-table"><thead><tr><th>Item</th><th>Past Run</th><th>Fresh Run</th><th>Change</th></tr></thead><tbody id="jobDrawerCompareBody"></tbody></table>
+        </div>
+      </section>
+    </div>
+    <div class="modal-footer">
+      <button id="jobDrawerRunAgainBtn" class="va-btn va-btn-primary" type="button" aria-busy="false">Run Again &amp; Compare</button>
+      <button id="jobDrawerDoneBtn" class="va-btn va-btn-secondary" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="destDialog" class="va-modal-sheet dest-dialog" closedby="any" aria-labelledby="destDialogTitle">
+    <div class="va-modal-sheet-hdr modal-header">
+      <h1 id="destDialogTitle" class="modal-title">Save Destination</h1>
+      <button id="destDialogCloseBtn" class="va-btn va-btn-ghost va-btn-sm" type="button" aria-label="Close destination dialog">Close</button>
+    </div>
+    <form id="destForm" class="va-modal-sheet-body modal-body dest-form" novalidate>
+      <input id="destIdInput" type="hidden" value="">
+      <div class="va-form-grid">
+        <div class="va-field"><label for="destNameInput" class="va-label">Display Name</label><input id="destNameInput" class="va-input" type="text" placeholder="Core Gateway" required autofocus aria-describedby="destNameError" aria-invalid="false" data-error="destNameError"><span id="destNameError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+        <div class="va-field"><label for="destTargetInput" class="va-label">Target Host, IP, or URL</label><input id="destTargetInput" class="va-input" type="text" placeholder="192.0.2.1" required aria-describedby="destTargetError" aria-invalid="false" data-error="destTargetError"><span id="destTargetError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+        <div class="va-field">
+          <label for="destCategorySelect" class="va-label">Category</label>
+          <select id="destCategorySelect" class="va-select"><option value="Core">Core</option><option value="Website &amp; API">Website &amp; API</option><option value="LAN">LAN</option><option value="Servers &amp; NAS">Servers &amp; NAS</option><option value="Containers">Containers</option><option value="Remote">Remote</option></select>
+        </div>
+        <div class="va-field"><label for="destMacInput" class="va-label">Wake MAC Address (Optional)</label><input id="destMacInput" class="va-input" type="text" placeholder="00:00:5E:00:53:42" aria-describedby="destMacError" aria-invalid="false" data-error="destMacError"><span id="destMacError" class="va-field-error" role="alert" aria-live="polite"></span></div>
+      </div>
+      <div class="va-field"><label for="destCheckSelect" class="va-label">Default Check</label><select id="destCheckSelect" class="va-select"></select></div>
+      <div class="dest-toggles">
+        <label class="checkbox-row"><input id="destPinnedCheck" type="checkbox"> <span>Pin to top bar for 1-click checks</span></label>
+        <label class="checkbox-row"><input id="destMonitorCheck" type="checkbox"> <span>Monitor automatically every 5 minutes</span></label>
+      </div>
+      <div class="modal-footer dest-modal-footer">
+        <button id="destCancelBtn" class="va-btn va-btn-ghost" type="button">Cancel</button>
+        <button id="destSaveBtn" class="va-btn va-btn-primary" type="submit" aria-busy="false">Save Destination</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="a11yAnnouncer" class="va-sr-only visually-hidden" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

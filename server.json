@@ -1,0 +1,66 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.FrankXLT/mcp-adv-netutils",
+  "title": "Advanced Network Utilities",
+  "description": "Pure-Go L2-L7 network diagnostics, triage recipes, 30-day cron monitor, and Operator Studio.",
+  "repository": {
+    "url": "https://github.com/FrankXLT/mcp-adv-netutils",
+    "source": "github"
+  },
+  "websiteUrl": "https://projects.oaworkbench.org/mcp-adv-netutils/",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/frankxlt/mcp-adv-netutils:1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "--stdio",
+          "isRequired": true,
+          "description": "Run mcp-adv-netutils over standard input/output without HTTP listeners or PATH_SECRET."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "PASS_HASH",
+          "description": "Optional 64-hex SHA-256 deadbolt passphrase hash for 30-minute unlock of sensitive diagnostics and watchlist mutations.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "PATH_SECRET",
+          "description": "Optional high-entropy path secret protecting the remote HTTP MCP doorway (/{PATH_SECRET}/mcp).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "LAN_MCP_TOKEN",
+          "description": "Optional token protecting the RFC1918-only LAN doorway (/lan/{LAN_MCP_TOKEN}/mcp).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NETUTILS_ALLOW_CIDRS",
+          "description": "Optional comma-separated CIDR allowlist restricting active diagnostic probe targets.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "NETUTILS_DENY_CIDRS",
+          "description": "Optional comma-separated CIDR denylist blocking probe targets (169.254.0.0/16 is always blocked).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

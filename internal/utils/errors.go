@@ -17,7 +17,7 @@ func ParseJSONUnmarshalError(err error) error {
 		return fmt.Errorf("invalid value for field %q: expected %q but got %q",
 			unmarshalErr.Field, unmarshalErr.Type.String(), unmarshalErr.Value)
 	case errors.As(err, &syntaxErr):
-		return fmt.Errorf("invalid input provided to the tool")
+		return errors.New("invalid input provided to the tool")
 	default:
 		return err
 	}

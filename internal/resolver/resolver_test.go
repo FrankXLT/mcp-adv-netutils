@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -410,5 +411,79 @@ func TestLookupIPAddresses(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, addresses)
 		assert.True(t, isHostNotFoundError(err))
+	})
+}
+
+func TestExecute_IPVersionValidation(t *testing.T) {
+	ctx := context.Background()
+	for _, bad := range []string{"invalid", "IPv4", "all", "ip4"} {
+		res, err := Execute(ctx, ResolverParams{Hostname: "localhost", IPVersion: bad}, nil)
+		require.Error(t, err, "ip_version=%q should error", bad)
+		assert.Nil(t, res)
+		assert.Contains(t, err.Error(), "invalid ip_version")
+	}
+}
+
+func TestExecute_SanitizeAndGuard(t *testing.T) {
+	ctx := context.Background()
+	guard, err := security.NewTargetGuardWithOptions(nil, nil, true)
+	require.NoError(t, err)
+	cfg := &Config{Timeout: 2 * time.Second, Guard: guard}
+
+	for _, badHost := range []string{"-flag", "bad/path", "host?query", "host name"} {
+		_, err := Execute(ctx, ResolverParams{Hostname: badHost}, cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid hostname")
+	}
+
+	for _, blocked := range []string{"127.0.0.1", "169.254.169.254", "localhost"} {
+		_, err := Execute(ctx, ResolverParams{Hostname: blocked, IPVersion: "ipv4"}, cfg)
+		require.Error(t, err, "target=%q should be blocked", blocked)
+		assert.Contains(t, err.Error(), "blocked")
+	}
+}
+
+func TestExecute_BothModePartialSuccess(t *testing.T) {
+	ctx := context.Background()
+	notFound := &net.DNSError{Err: "no such host", Name: "partial.example", IsNotFound: true}
+
+	t.Run("ipv4 succeeds and ipv6 not found", func(t *testing.T) {
+		mock := func(_ context.Context, _ string, v string) ([]string, error) {
+			if v == "ipv4" {
+				return []string{"93.184.216.34"}, nil
+			}
+			return nil, notFound
+		}
+		res, err := executeWithLookup(ctx, ResolverParams{Hostname: "partial.example", IPVersion: "both"}, nil, mock)
+		require.NoError(t, err)
+		assert.False(t, res.Failed)
+		assert.Empty(t, res.Error)
+		assert.Equal(t, []string{"93.184.216.34"}, res.IPv4Addresses)
+		assert.Empty(t, res.IPv6Addresses)
+	})
+
+	t.Run("ipv6 succeeds and ipv4 not found", func(t *testing.T) {
+		mock := func(_ context.Context, _ string, v string) ([]string, error) {
+			if v == "ipv6" {
+				return []string{"2606:2800:220:1:248:1893:25c8:1946"}, nil
+			}
+			return nil, notFound
+		}
+		res, err := executeWithLookup(ctx, ResolverParams{Hostname: "partial.example", IPVersion: "both"}, nil, mock)
+		require.NoError(t, err)
+		assert.False(t, res.Failed)
+		assert.Empty(t, res.Error)
+		assert.Empty(t, res.IPv4Addresses)
+		assert.Equal(t, []string{"2606:2800:220:1:248:1893:25c8:1946"}, res.IPv6Addresses)
+	})
+
+	t.Run("both not found sets failed and error", func(t *testing.T) {
+		mock := func(_ context.Context, _ string, _ string) ([]string, error) {
+			return nil, notFound
+		}
+		res, err := executeWithLookup(ctx, ResolverParams{Hostname: "missing.example", IPVersion: "both"}, nil, mock)
+		require.NoError(t, err)
+		assert.True(t, res.Failed)
+		assert.NotEmpty(t, res.Error)
 	})
 }

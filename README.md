@@ -1,234 +1,194 @@
-# Advanced Network Utilities MCP Server (`mcp-adv-netutils`)
+# Advanced Network Utilities (`mcp-adv-netutils`) v1.0
 
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Ffrankxlt%2Fmcp--adv--netutils-blue?logo=docker)](https://github.com/FrankXLT/mcp-adv-netutils/pkgs/container/mcp-adv-netutils)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Project Showcase](https://img.shields.io/badge/OAW%20Projects-Overview%20%7C%20Demo%20%7C%20Docs-2563eb)](https://projects.oaworkbench.org/mcp-adv-netutils/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`mcp-adv-netutils` is an advanced [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server engineered for high-fidelity physical network diagnostics, entity reconciliation, and Layer 1–Layer 7 infrastructure monitoring.
+**Advanced Network Utilities** (`mcp-adv-netutils`) is a pure-Go (`CGO_ENABLED=0`) [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server, scheduled cron monitor, and embedded 4-theme **Operator Studio (`/web`)** engineered for Layer 1–Layer 7 diagnostics across home labs, multi-VLAN infrastructure, and container hosts.
 
-Forked from [`patrickdappollonio/mcp-netutils`](https://github.com/patrickdappollonio/mcp-netutils), this enhanced edition introduces embedded IEEE OUI hardware manufacturer resolution, Layer 4 TCP port scanning, hop-by-hop route tracing, concurrent batch reverse DNS, and Wake-on-LAN (WOL) magic packet generation.
-
----
-
-## Key Features & Architecture
-
-- **Embedded High-Speed IEEE OUI Database**: Over 39,800 IEEE Organizationally Unique Identifiers (OUIs) pre-compiled and embedded directly into the Go binary (`//go:embed`) with gzip compression. Resolves hardware manufacturers in sub-millisecond time without external web API dependencies or rate limits.
-- **Virtual / Docker MAC Detection**: Inspects IEEE 802 Locally Administered Address (LAA) bit 1 (`XX:X2:...`, `XX:X6:...`, `XX:XA:...`, `XX:XE:...`, including Docker bridge `02:42:...`) to reliably distinguish physical hardware from virtual interfaces and container bridges.
-- **Layer 4 TCP Port Scanning**: Concurrent TCP connect handshakes against well-known ports (SSH, HTTP, HTTPS, RTSP, MQTT, Home Assistant, Portainer, etc.) or custom port ranges to determine active service listeners.
-- **Hop-by-Hop Traceroute**: System route tracing measuring hop RTT, packet loss, and automatic reverse PTR lookup per hop.
-- **Batch Reverse DNS**: High-concurrency reverse DNS PTR resolution for comma-separated IP address lists.
-- **Wake-on-LAN (WOL)**: UDP broadcast delivery of standard 102-byte Magic Packets to wake suspended physical nodes.
-- **Comprehensive DNS & HTTP Diagnostics**: Full support for local DNS, DoH (Cloudflare/Google), WHOIS, ICMP ping, HTTP ping with detailed breakdown (`dns`, `conn`, `tls`, `ttfb`, `total`), and TLS certificate chain inspection.
-- **Dual Transport (stdio & SSE)**: Runs in standard CLI stdio mode or as an HTTP Server-Sent Events (SSE) server for web integrations and containerized agentic pipelines.
+> **Interactive Showcase & Guides**: Visit [**projects.oaworkbench.org/mcp-adv-netutils/**](https://projects.oaworkbench.org/mcp-adv-netutils/) for the live zero-backend `?demo=1` Operator Studio (`./demo/`) and searchable plain-language guides (`./docs/`), or read [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the complete `WF-01..WF-08` behavioral baseline.
 
 ---
 
-## Available MCP Tools (12 Total)
+## What's New in v1.0
 
-| Tool Name | Scope | Description |
+- **Zero Node.js / Zero `supergateway` Runtime**: Ships as a single static `CGO_ENABLED=0` Go binary inside a single-layer Alpine container (`~41.5 MB` unpacked / `~11.4 MB` compressed, `USER netutils`, `setcap cap_net_raw+ep` via `RUN --mount=type=bind`), serving native `--stdio`, Streamable HTTP, backward-compatible `/sse`, `/web`, and `/healthz`.
+- **33 Registered MCP Tools**: Combines 12 hardened core tools, 6 active L2–L7 probes, 8 coordinated Diagnostic Recipes (`recipe_*`), `render_run_digest`, 4 Cron, Saved Destinations & Archive tools (adding `manage_saved_destinations`), and `unlock_netutils`/`lock_netutils`.
+- **Three-Tier ASCII Styles (`style`)**: Deterministic monospace cards across every tool and recipe—`default` (`72` columns exact), `quick` (`<= 40` columns borderless for `390px` mobile), `rich` (`76` columns boxed TUI), and `json` (`< 18.5 KB` wire cap with `FAIL`/`WARN` sorted first).
+- **30-Day SQLite Job Archive, Saved Destinations & Two-Tick Cron Watchlist**: Pure-Go `robfig/cron/v3` scheduler running `watchlist.yaml` plus `dest_<id>` Saved Destination monitors into WAL SQLite (`netutils_jobs.db` via `modernc.org/sqlite`), featuring **Two-Tick Alert Hysteresis** (`>= 2` consecutive non-OK ticks), **`7d -> 30d` healthy tick down-aging**, hourly TTL reaping + `PRAGMA incremental_vacuum`, and `--max-store-mb 256` cap.
+- **Thirty-Minute Passphrase Deadbolt & Two-Doorway Setup**: Voice-normalized SHA-256 lock (`PASS_HASH` + `crypto/subtle.ConstantTimeCompare`) paired with a remote `/{PATH_SECRET}/mcp` + `/web` doorway, a LAN-only `/lan/{LAN_MCP_TOKEN}/mcp` + `/sse` doorway, and central CIDR target guard blocking `169.254.0.0/16`.
+- **Embedded 4-Theme Network Studio (`/web`)**: Responsive Quiet UI (`//go:embed`) across `Pure White`, `Warm Paper`, `Dark`, and `Dark Paper` themes featuring Apache ECharts SVG visualizations, Pinned Destinations & **Scan Pinned**, goal-grouped checks, Chart/Table toggle, Summary/TSV export, Saved Destinations manager, and Past Run Drawer (**Run Again & Compare**), plus `?demo=1` preview mode.
+- **5 Bundled Agent Skills (`skills/`)**: Ready-to-use `SKILL.md` playbooks guiding LLM formatting, differential ping interpretation, LAN radar sweeps, split-horizon triage, and cron/destination monitoring.
+
+---
+
+## MCP Tool Suite
+
+`mcp-adv-netutils` v1.0 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
+
+### 1. Hardened Core Tools (12)
+
+| Tool | Layer | Capabilities & v1.0 Hardening |
 | :--- | :--- | :--- |
-| **`mac_vendor_lookup`** | Hardware / L2 | Resolves MAC to IEEE OUI vendor and detects locally administered (LAA/Docker) MACs |
-| **`traceroute`** | Routing / L3 | Hop-by-hop route tracing isolating intermediate gateways, latency, and packet loss |
-| **`tcp_port_scan`** | Transport / L4 | Concurrent TCP connect handshakes on target ports to verify active service listeners |
-| **`dns_reverse_batch`**| Resolution / L7 | Batch-resolves PTR hostnames concurrently for a comma-separated list of IP addresses |
-| **`wol_wake`** | Power / L2 | Sends standard 102-byte Wake-on-LAN Magic Packet broadcast frames |
-| **`local_dns_query`** | Resolution / L7 | Queries local OS-configured DNS servers (`A`, `AAAA`, `CNAME`, `MX`, `NS`, `PTR`, `TXT`) |
-| **`remote_dns_query`**| Resolution / L7 | Performs secure DNS queries via Cloudflare and Google DNS-over-HTTPS |
-| **`whois_query`** | Registry / L7 | Performs WHOIS queries to retrieve domain registration metadata |
-| **`resolve_hostname`**| Resolution / L7 | Converts hostnames to IPv4, IPv6, or dual-stack addresses |
-| **`ping`** | Connectivity / L3 | Performs ICMP ping operations measuring round-trip time and packet loss |
-| **`http_ping`** | Application / L7 | Tests HTTP endpoints with microsecond timing breakdowns (`dns`, `conn`, `tls`, `ttfb`) |
-| **`tls_certificate_check`** | Security / L7 | Inspects TLS certificate chains, expiry dates, SANs, and issuer authorities |
+| **`mac_vendor_lookup`** | L2 | Embedded `39,800+` IEEE OUI lookup; separates physical `[UAA]` from Docker/VM `[LAA]` (`02:42:...`) |
+| **`ping`** | L3 | Per-call Echo ID/sequence isolation, IPv4/IPv6 TTL control messages, explicit `probe_mode` (`icmp` vs `tcp_fallback`) |
+| **`traceroute`** | L3 | Rejects leading `-` targets, enforces `"--"`, bounds concurrent hop PTR lookups |
+| **`tcp_port_scan`** | L4 | Concurrent TCP connect scan with named presets (`common`, `homelab`, `web`, `iot`; default `common`) |
+| **`dns_reverse_batch`** | L7 | Concurrent reverse PTR resolution capped at `256` validated IPs per call |
+| **`wol_wake`** | L2 | Sends standard 102-byte UDP Wake-on-LAN Magic Packet frames (`port` `7` or `9`) |
+| **`local_dns_query`** | L7 | Queries OS-configured local resolvers (`A`, `AAAA`, `CNAME`, `MX`, `NS`, `PTR`, `TXT`, etc.) |
+| **`remote_dns_query`** | L7 | Queries Cloudflare and Google DNS-over-HTTPS (DoH) |
+| **`resolve_hostname`** | L7 | Resolves IPv4, IPv6, or dual-stack host addresses |
+| **`whois_query`** | L7 | Domain registration metadata lookup via WHOIS |
+| **`http_ping`** | L7 | HTTP timing waterfall (`dns`, `conn`, `tls`, `ttfb`, `total`) |
+| **`tls_certificate_check`** | L7 | Verifies against `x509.SystemCertPool()` + wire intermediates; supports `Ed25519` keys |
+
+### 2. Active L2–L7 Diagnostic Probes (6)
+
+| Tool | Layer | Description |
+| :--- | :--- | :--- |
+| **`arp_neighbor_sweep`** | L2 | OS/ARP neighbor discovery (`mdlayher/arp`) enriched with OUI vendors and UAA/LAA flags |
+| **`mtu_path_probe`** | L3 | Probes `1500` / `1492` / `1420` / `1280` DF frames to catch tunnel and WAN fragmentation black holes |
+| **`mtr_path_quality`** | L3 | Multi-cycle per-hop loss, min/avg/max RTT, and jitter path quality matrix |
+| **`mdns_ssdp_discover`** | L7 | Bounded mDNS (`hashicorp/mdns`) and SSDP local service discovery |
+| **`split_dns_audit`** | L7 | Side-by-side comparison of internal local DNS vs. external DoH answers |
+| **`snmp_switch_port`** | L2 | Read-only SNMP (`gosnmp`) switch port, VLAN, and MAC FDB correlation |
+
+### 3. Diagnostic Recipes, Digest, Cron, Destinations & Deadbolt Tools
+
+| Category | Tools | Purpose |
+| :--- | :--- | :--- |
+| **Diagnostic Recipes (8)** | `recipe_diff_ping`, `recipe_diff_dns`, `recipe_diff_http`, `recipe_diff_snapshot`, `recipe_host_card`, `recipe_lan_radar`, `recipe_path_autopsy`, `recipe_wake_verify` | Coordinated multi-probe differential ladders, UAA/LAA LAN sweeps, before/after snapshot diffs (`[+]`, `[-]`, `[~]`), and WOL verification |
+| **Digest Renderer (1)** | `render_run_digest` | Re-renders any persisted `job_id` report on demand into `default`, `quick`, `rich`, or `json` |
+| **Cron, Destinations & Archive (4)** | `get_cron_status`, `manage_cron_watchlist`, `manage_saved_destinations`, `get_job_report` | `< 5ms` `24h`/`7d`/`30d` ASCII health strips, `watchlist.yaml` management, `list`/`save`/`delete`/`run` saved targets (`TargetGuard` + `dest_<id>` cron sync), and 30-day `job_id` re-pulls with `expires_at` |
+| **Deadbolt Session (2)** | `unlock_netutils`, `lock_netutils` | Voice-normalized SHA-256 unlock (`30m` sliding TTL) and immediate manual relock |
 
 ---
 
-## Tool Usage & Schema Reference
+## Three-Tier ASCII Styles & Output Budgets
 
-### 1. `mac_vendor_lookup`
-Resolves a MAC address to its hardware manufacturer using the embedded IEEE OUI registry and analyzes the IEEE 802 MAC address bit flags.
+Every tool, Diagnostic Recipe, and cron summary supports a `style` parameter designed for clean monospace rendering across mobile phones, IDE panes, and CI automation:
 
-**Parameters:**
-- `mac` (string, required): Hardware MAC address in colon, hyphen, or dot-separated format (e.g., `44:61:32:00:11:22` or `02-42-C0-A8-03-A9`).
-
-**Example Response:**
-```json
-{
-  "mac": "44:61:32:00:11:22",
-  "normalized_mac": "44:61:32:00:11:22",
-  "oui": "44:61:32",
-  "vendor": "ecobee inc",
-  "is_locally_administered": false,
-  "address_type": "unicast_uaa"
-}
-```
-
-When checking a Docker bridge or virtual container MAC:
-```json
-{
-  "mac": "02:42:c0:a8:03:a9",
-  "normalized_mac": "02:42:c0:a8:03:a9",
-  "oui": "02:42:c0",
-  "vendor": "Locally Administered / Virtual (Docker / VM)",
-  "is_locally_administered": true,
-  "address_type": "unicast_laa"
-}
-```
+| `style` | Width / Budget | Best For |
+| :--- | :--- | :--- |
+| **`default`** *(default)* | `72` columns exact | Chat apps, IDE terminals, and unfolded tablets (`900px`) |
+| **`quick`** | `<= 40` columns, borderless | Folded phones (`390px`) with zero line wrapping |
+| **`rich`** | `76` columns, boxed TUI | Desktop (`1440px+`) hop ladders, histograms, and status badges |
+| **`json`** | `< 18.5 KB` wire cap | Programmatic diffing with `FAIL` and `WARN` rows sorted first |
 
 ---
 
-### 2. `traceroute`
-Executes hop-by-hop network path tracing to isolate routing issues, latency spikes, and intermediate gateway hops.
+## Cron Watchlist, Saved Destinations & 30-Day Job Archive
 
-**Parameters:**
-- `target` (string, required): Destination hostname or IP address (e.g. `example.com` or `192.0.2.1`).
-- `max_hops` (integer, optional, default: `30`): Maximum time-to-live / hop count.
-- `timeout` (string, optional, default: `"2s"`): Per-probe timeout.
+Scheduled jobs in [`watchlist.yaml`](watchlist.yaml) and monitored Saved Destinations (`dest_<id>`) run automatically in-process via `robfig/cron/v3` (`SkipIfStillRunning`) or as a one-shot external timer (`--run-watchlist-once`):
 
-**Example Response:**
-```json
-{
-  "target": "example.com",
-  "ip": "93.184.215.14",
-  "total_hops": 8,
-  "hops": [
-    { "hop": 1, "host": "gateway.homelab.local", "ip": "192.0.2.1", "rtt_ms": 0.42 },
-    { "hop": 2, "host": "isp-gw.example.net", "ip": "198.51.100.1", "rtt_ms": 4.15 }
-  ]
-}
-```
+- **Default Watchlist Cadence**: `*/5m` canary `recipe_diff_ping`, `*/15m` `mtu_path_probe`, `*/6h` `recipe_diff_dns` and `recipe_diff_http`, plus nightly `tls_certificate_check` and `recipe_diff_snapshot`.
+- **Saved Destinations (`manage_saved_destinations`)**: Stores friendly targets (category, optional Wake MAC, default check, pinned toggle, and 5-minute monitor toggle) in SQLite (`saved_destinations`), validates targets via `TargetGuard`, supports `list` | `save` | `delete` | `run`, and syncs `dest_<id>` checks with the cron watchlist.
+- **Two-Tick Alert Hysteresis**: Alerts flip only after **`>= 2` consecutive non-OK ticks**, preventing single-packet jitter from triggering false alarms.
+- **30-Day WAL SQLite Archive (`netutils_jobs.db`)**: Pure-Go `modernc.org/sqlite` (`?mode=ro` readers) retains every manual, MCP, and incident report for `30d` (`get_job_report`), down-ages healthy `*/5m` ticks across `7d -> 30d`, and runs an hourly TTL reaper with `PRAGMA incremental_vacuum` bounded by `--max-store-mb 256`.
 
 ---
 
-### 3. `tcp_port_scan`
-Performs rapid Layer 4 TCP connection handshakes to detect open services and identify listening daemons.
+## 5-Layer Security & Two-Doorway Setup
 
-**Parameters:**
-- `target` (string, required): Destination hostname or IP address.
-- `ports` (string, optional, default: `"common"`): Comma-separated list of ports (`"22,80,443,8000"`) or preset `"common"`.
-  - Preset `"common"` tests: `21, 22, 53, 80, 443, 554, 1883, 3000, 5000, 8000, 8080, 8123, 8443, 9000, 9443`.
-- `timeout` (string, optional, default: `"1.5s"`): Socket connection timeout per probe.
+See [SECURITY.md](SECURITY.md) for full details on the 5-layer defense-in-depth architecture:
 
-**Example Response:**
-```json
-{
-  "target": "192.0.2.50",
-  "open_ports": [
-    { "port": 22, "service": "ssh" },
-    { "port": 8123, "service": "homeassistant" }
-  ],
-  "total_scanned": 15
-}
-```
+1. **Thirty-Minute Passphrase Deadbolt (`PASS_HASH`)**: Voice-normalized SHA-256 verification via `crypto/subtle.ConstantTimeCompare` with automatic `30m` relock (and optional redacted aggregate cron summaries while locked).
+2. **Two-Doorway Setup**:
+   - **Remote Doorway (`/{PATH_SECRET}/mcp` + `/web`)**: High-entropy path secret + Deadbolt protection for mobile/remote clients.
+   - **LAN-Only Doorway (`/lan/{LAN_MCP_TOKEN}/mcp` + `/sse`)**: Rejects `X-Forwarded-For` / `X-Real-IP` / `Forwarded` proxy headers and non-RFC1918 source IPs.
+3. **`/web/api/*` Anti-CSRF & Anti-DNS-Rebinding**: Strict `Origin` and `Host` header validation.
+4. **Central Target Guard & CLI `--` Prevention**: Enforces `--allow-cidrs` / `--deny-cidrs` on DNS-resolved IPs, unconditionally blocks `169.254.0.0/16` metadata endpoints, and blocks leading `-` target injection.
+5. **Unprivileged Container**: Runs as `USER netutils` with minimal `cap_net_raw+ep` capability—no `root`, no `Privileged: true`.
 
 ---
 
-### 4. `dns_reverse_batch`
-Resolves PTR hostnames concurrently across a batch of IP addresses.
+## Embedded Operator Studio (`/web`)
 
-**Parameters:**
-- `ips` (string, required): Comma-separated list of IPv4/IPv6 addresses (e.g. `"192.0.2.1, 192.0.2.10, 192.0.2.20"`).
+Compiled directly into the Go binary (`//go:embed`), `/web` provides a 4-theme Quiet UI Network Studio (`Pure White`, `Warm Paper`, `Dark`, `Dark Paper`) with Comfortable (`d2`) and Compact (`d3`) density:
 
-**Example Response:**
-```json
-{
-  "results": {
-    "192.0.2.1": "gateway.homelab.local",
-    "192.0.2.10": "storage-nas.homelab.local",
-    "192.0.2.20": "switch-core.homelab.local"
-  },
-  "unresolved": []
-}
-```
+- **Pre-Unlock Gate**: Clean passphrase challenge when `PASS_HASH` is locked, with a 1-tap link to depersonalized `?demo=1` preview fixtures.
+- **Apache ECharts SVG Visualizations & Export**: Theme-aware Apache ECharts SVG charts for path latency whiskers, HTTP timing waterfalls, DNS comparisons, and `24h`/`7d`/`30d` uptime timelines, paired with a **Chart / Table** toggle and **Copy Summary** / **Copy Data** (TSV) export.
+- **Pinned Destinations & Goal-Grouped Checks**: 1-click Pinned Destinations bar + **Scan Pinned** sweep, goal-grouped check selector (`Connectivity`, `Web & TLS`, `DNS`, `Local Network`), and a full **Saved Destinations** manager (`add`, `edit`, `pin`, `monitor`, `delete`).
+- **Three Integrated Tabs & Past Run Drawer**: **`Checks`**, **`Local Network`** (Physical Hardware vs. Containers & VMs with `Ping`/`Ports`/`Wake`/`Save` actions and baseline diffs), and **`Schedule & History`** (`24h`/`7d`/`30d` health timeline + 30-day Past Check Runs opening the **Past Run Drawer** with **Run Again & Compare**).
+- **Responsive Breakpoints**: `>= 40px` touch targets and `>= 16px` inputs with `0px` horizontal overflow at `390px` (phone), 2-pane workspace at `900px` (tablet), and full Studio workspace at `1440px+` (desktop).
 
 ---
 
-### 5. `wol_wake`
-Constructs and broadcasts a 102-byte standard Wake-on-LAN Magic Packet frame (`6x 0xFF` followed by 16 iterations of the target MAC address) over UDP.
+## Bundled Agent Skills (`skills/`)
 
-**Parameters:**
-- `mac` (string, required): Hardware MAC address of the target machine.
-- `broadcast_ip` (string, optional, default: `"255.255.255.255"`): Subnet broadcast address (e.g. `"192.0.2.255"`).
-- `port` (integer, optional, default: `9`): Destination UDP port (`7` or `9`).
+Five ready-to-use `SKILL.md` guides ship inside [`skills/`](skills):
 
-**Example Response:**
-```json
-{
-  "success": true,
-  "mac": "bc:24:11:80:a2:14",
-  "broadcast": "192.0.2.255:9",
-  "bytes_sent": 102
-}
-```
+- [`skills/netutils-ascii-display`](skills/netutils-ascii-display/SKILL.md) — Deterministic `default`/`quick`/`rich`/`json` formatting and `render_run_digest`.
+- [`skills/netutils-differential-ping`](skills/netutils-differential-ping/SKILL.md) — `recipe_diff_ping`, `recipe_path_autopsy`, `mtu_path_probe`, `mtr_path_quality`, and `icmp` vs. `tcp_fallback` triage.
+- [`skills/netutils-lan-radar`](skills/netutils-lan-radar/SKILL.md) — `recipe_lan_radar`, ARP/mDNS/SSDP/PTR/SNMP correlation, UAA vs. LAA grouping, `recipe_diff_snapshot`, and `recipe_wake_verify`.
+- [`skills/netutils-split-horizon-web`](skills/netutils-split-horizon-web/SKILL.md) — `recipe_diff_dns`, `split_dns_audit`, `recipe_diff_http`, `recipe_host_card`, Deadbolt, and Apache ECharts `/web` Studio.
+- [`skills/netutils-cron-monitor`](skills/netutils-cron-monitor/SKILL.md) — `get_cron_status`, `manage_cron_watchlist`, `manage_saved_destinations`, `get_job_report`, Two-Tick Alert Hysteresis, and `7d -> 30d` down-aging.
 
 ---
 
 ## Deployment & Setup
 
-### Docker Compose / Portainer Deployment
+### Docker Compose (Synology / Linux Docker host / Portainer GitOps Pattern)
 
-Deploy `mcp-adv-netutils` as a standalone microservice exposing the SSE endpoint on port `8000`:
+Deploy the single-layer Alpine pure-Go image (`~41.5 MB` unpacked / `~11.4 MB` compressed, `cap_net_raw+ep` via `RUN --mount=type=bind`) with persistent 30-day SQLite storage, `NET_RAW` for ICMP/ARP probes, and native HTTP flags (zero `supergateway`, and no `runc exec` container healthchecks on Synology DSM Kernel 4.4—use external `GET /healthz` checks instead):
 
 ```yaml
-version: '3.8'
-
 services:
-  mcp-adv-netutils:
+  mcp-netutils:
     image: ghcr.io/frankxlt/mcp-adv-netutils:latest
-    container_name: mcp-adv-netutils
+    container_name: mcp-netutils
     restart: unless-stopped
-    command: ["-sse", "-sse-port", "8000"]
+    init: true
+    cap_add:
+      - NET_RAW
+    environment:
+      - PASS_HASH=${PASS_HASH}
+      - PATH_SECRET=${PATH_SECRET}
+      - LAN_MCP_TOKEN=${LAN_MCP_TOKEN}
+    command:
+      - --http
+      - --http-addr=:8000
+      - --data-dir=/data
+      - --max-store-mb=256
+      - --watchlist=/app/watchlist.yaml
+    volumes:
+      - ./data:/data
     ports:
       - "8000:8000"
-    networks:
-      - internal_net
-
-networks:
-  internal_net:
-    driver: bridge
+    # On Synology DSM Kernel 4.4, omit container exec healthchecks and monitor GET /healthz externally
 ```
 
-### Docker CLI Run
-
-Run directly in SSE mode:
+### Docker CLI (`--stdio` & HTTP Modes)
 
 ```bash
+# Interactive --stdio JSON-RPC mode
+docker run -i --rm ghcr.io/frankxlt/mcp-adv-netutils:latest --stdio
+
+# Native HTTP mode with persistent SQLite store and /web Studio
 docker run -d \
   --name mcp-adv-netutils \
+  --cap-add NET_RAW \
   -p 8000:8000 \
+  -v mcp_netutils_data:/data \
+  -e PASS_HASH="<sha256-hex>" \
+  -e PATH_SECRET="<high-entropy-secret>" \
+  -e LAN_MCP_TOKEN="<lan-token>" \
   ghcr.io/frankxlt/mcp-adv-netutils:latest \
-  -sse -sse-port 8000
+  --http --http-addr=:8000 --data-dir=/data
 ```
 
-Run in interactive CLI `stdio` mode:
+### MCP Client Configuration
 
-```bash
-docker run -i --rm ghcr.io/frankxlt/mcp-adv-netutils:latest
-```
-
-### Client Configuration (`claude_desktop_config.json` / Antigravity)
-
-#### Option A: Server-Sent Events (SSE) via Supergateway or Direct HTTP
 ```json
 {
   "mcpServers": {
-    "netutils": {
-      "url": "http://mcp-adv-netutils.lan:8000/sse"
-    }
-  }
-}
-```
-
-#### Option B: Stdio Local Execution
-```json
-{
-  "mcpServers": {
-    "netutils": {
+    "netutils-lan": {
+      "url": "http://netutils.example.internal:8000/sse"
+    },
+    "netutils-stdio": {
       "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "ghcr.io/frankxlt/mcp-adv-netutils:latest"
-      ]
+      "args": ["run", "-i", "--rm", "ghcr.io/frankxlt/mcp-adv-netutils:latest", "--stdio"]
     }
   }
 }
@@ -236,26 +196,32 @@ docker run -i --rm ghcr.io/frankxlt/mcp-adv-netutils:latest
 
 ---
 
-## Building from Source
-
-Requirements:
-- Go 1.22+ installed
-- Standard build toolchain (`make`, `git`)
+## Building from Source & Testing
 
 ```bash
-# Clone the repository
 git clone https://github.com/FrankXLT/mcp-adv-netutils.git
 cd mcp-adv-netutils
 
-# Build binary
-CGO_ENABLED=0 go build -ldflags="-s -w" -o mcp-adv-netutils main.go
+# Build static pure-Go binary (CGO_ENABLED=0)
+CGO_ENABLED=0 go build -ldflags="-s -w" -o mcp-adv-netutils .
 
-# Run locally
-./mcp-adv-netutils -sse -sse-port 8000
+# Run offline race-enabled unit tests
+go test -race ./...
+
+# Single-shot watchlist execution (for external systemd timers)
+./mcp-adv-netutils --run-watchlist-once --watchlist=./watchlist.yaml --data-dir=./data
 ```
 
 ---
 
-## License
+## Documentation & Roadmap
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- [**docs/WORKFLOWS.md**](docs/WORKFLOWS.md) — Common Terms Glossary and bound workflows (`WF-01`..`WF-08`) across `390px`, `900px`, and `1440px`.
+- [**SECURITY.md**](SECURITY.md) — 5-Layer Security Architecture, Passphrase Deadbolt, and CIDR Target Guard.
+- [**ROADMAP.md**](ROADMAP.md) — Next milestone (**Wave 4**): Deadbolt-gated on-demand BPF `SPAN`/`ERSPAN` capture -> pure-Go `parquet-go` (`72h` raw TTL + `30d` SQLite summary retention).
+
+## Attribution & License
+
+Originally forked from [`patrickdappollonio/mcp-netutils`](https://github.com/patrickdappollonio/mcp-netutils) and expanded into **Advanced Network Utilities** (`FrankXLT/mcp-adv-netutils`) with pure-Go single-binary transport, active L2–L7 diagnostics, Diagnostic Recipes, 30-day SQLite cron monitoring, and the embedded 4-theme Operator Studio.
+
+Licensed under the MIT License — see [LICENSE](LICENSE).

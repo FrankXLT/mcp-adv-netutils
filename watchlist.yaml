@@ -1,0 +1,46 @@
+# Default Cron Watchlist for mcp-adv-netutils
+# Customize targets to match your environment (e.g., RFC1918 gateways, internal FQDNs, or public endpoints).
+# Two-Tick Alert Hysteresis applies globally: alerts trigger only after >= 2 consecutive non-OK ticks.
+
+jobs:
+  - id: wan-canary-ping
+    schedule: "*/5 * * * *"
+    tool: recipe_diff_ping
+    target: "1.1.1.1"
+    description: "Differential reachability ladder (Local NIC -> Gateway -> WAN Peer -> Canary)"
+    enabled: true
+
+  - id: wg-mtu-check
+    schedule: "*/15 * * * *"
+    tool: mtu_path_probe
+    target: "1.1.1.1"
+    description: "Path MTU probe (1500/1492/1420/1280) to detect tunnel or WAN fragmentation black holes"
+    enabled: true
+
+  - id: split-dns-diff
+    schedule: "0 */6 * * *"
+    tool: recipe_diff_dns
+    target: "example.com"
+    description: "Compare local resolver output against external DoH for split-horizon drift"
+    enabled: true
+
+  - id: edge-http-diff
+    schedule: "0 */6 * * *"
+    tool: recipe_diff_http
+    target: "https://example.com"
+    description: "Compare internal vs external HTTP latency, status codes, and proxy health"
+    enabled: true
+
+  - id: nightly-tls-audit
+    schedule: "0 3 * * *"
+    tool: tls_certificate_check
+    target: "example.com"
+    description: "Nightly TLS certificate chain, SAN, and expiration audit"
+    enabled: true
+
+  - id: nightly-arp-snapshot
+    schedule: "15 3 * * *"
+    tool: recipe_diff_snapshot
+    target: "baseline"
+    description: "Nightly LAN ARP/MAC inventory diff against saved baseline ([+] ADDED / [-] REMOVED / [~] CHANGED)"
+    enabled: true

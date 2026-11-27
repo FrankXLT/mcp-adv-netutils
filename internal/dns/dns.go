@@ -2,18 +2,21 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/FrankXLT/mcp-adv-netutils/internal/response"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/utils"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/miekg/dns"
-	resp "github.com/patrickdappollonio/mcp-netutils/internal/response"
-	"github.com/patrickdappollonio/mcp-netutils/internal/utils"
 	doh "github.com/shynome/doh-client"
 )
 
@@ -21,71 +24,130 @@ import (
 type QueryConfig struct {
 	Timeout             time.Duration
 	RemoteServerAddress string
+	LocalServers        []string
+	Guard               *security.TargetGuard
 }
 
-// dnsQueryParams represents the parameters for DNS queries.
-type dnsQueryParams struct {
+// DNSQueryParams represents the parameters for DNS queries.
+type DNSQueryParams struct {
 	Domain     string `json:"domain"`
 	RecordType string `json:"record_type"`
 }
 
+// DNSQuestion represents a question entry in a DNS response.
+type DNSQuestion struct {
+	Name     string `json:"name"`
+	Type     uint16 `json:"type"`
+	TypeName string `json:"typeName,omitempty"`
+}
+
+// DNSAnswer represents an answer record in a DNS response.
+type DNSAnswer struct {
+	Name     string `json:"name"`
+	Type     uint16 `json:"type"`
+	TypeName string `json:"typeName,omitempty"`
+	TTL      uint32 `json:"TTL"`
+	Data     string `json:"data"`
+}
+
+// DNSResponse represents a structured DNS query response.
+type DNSResponse struct {
+	Status            int           `json:"status"`
+	StatusMessage     string        `json:"statusMessage,omitempty"`
+	Truncated         bool          `json:"truncated"`
+	AuthenticatedData bool          `json:"authenticatedData"`
+	CheckingDisabled  bool          `json:"checkingDisabled"`
+	Question          []DNSQuestion `json:"question"`
+	Answer            []DNSAnswer   `json:"answer,omitempty"`
+	EDNSClientSubnet  string        `json:"ednsClientSubnet,omitempty"`
+}
+
+const (
+	defaultQueryTimeout      = 5 * time.Second
+	defaultPrimaryDoHServer  = "https://cloudflare-dns.com/dns-query"
+	defaultFallbackDoHServer = "https://dns.google/dns-query"
+	defaultResolvConfPath    = "/etc/resolv.conf"
+)
+
+var defaultDoHClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
+
 // HandleLocalDNSQuery processes local DNS queries using OS-defined DNS servers.
-func HandleLocalDNSQuery(ctx context.Context, request mcp.CallToolRequest, config *QueryConfig) (*mcp.CallToolResult, error) {
-	var params dnsQueryParams
+func HandleLocalDNSQuery(ctx context.Context, request mcp.CallToolRequest, config *QueryConfig) (*mcp.CallToolResult, error) { //nolint:gocritic // Exported handler mirrors mcp-go ToolHandlerFunc value parameter.
+	var params DNSQueryParams
 	if err := request.BindArguments(&params); err != nil {
 		return nil, fmt.Errorf("failed to parse tool input: %w", utils.ParseJSONUnmarshalError(err))
 	}
 
-	// Validate required parameters
-	if params.Domain == "" {
-		return nil, fmt.Errorf("parameter \"domain\" is required")
+	result, err := ExecuteLocal(ctx, params, config)
+	if err != nil {
+		return nil, err
+	}
+	res, err := response.JSON(result)
+	if err != nil {
+		return nil, fmt.Errorf("encode DNS response: %w", err)
+	}
+	return res, nil
+}
+
+// ExecuteLocal performs a DNS query against configured local servers or system resolvers.
+func ExecuteLocal(ctx context.Context, params DNSQueryParams, config *QueryConfig) (*DNSResponse, error) {
+	if ctx == nil {
+		return nil, errors.New("context must not be nil")
 	}
 
-	if params.RecordType == "" {
-		return nil, fmt.Errorf("parameter \"record_type\" is required")
-	}
-
-	// Validate domain format
-	if strings.Contains(params.Domain, "..") || strings.HasPrefix(params.Domain, ".") {
-		return nil, fmt.Errorf("invalid domain format: %q", params.Domain)
-	}
-
-	recordType, err := ConvertToQType(params.RecordType)
+	m, err := prepareDNSQuery(params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Ensure domain ends with a dot for DNS queries
-	domain := params.Domain
-	if !strings.HasSuffix(domain, ".") {
-		domain = domain + "."
+	servers, err := resolveLocalServers(ctx, config)
+	if err != nil {
+		return nil, err
 	}
 
-	// Create a new DNS message
-	m := new(dns.Msg)
-	m.SetQuestion(domain, recordType)
-	m.RecursionDesired = true
+	timeout := effectiveTimeout(config)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	// Use local resolver for query
-	c := new(dns.Client)
-	c.Timeout = config.Timeout
+	c := &dns.Client{Timeout: timeout}
+	var guard *security.TargetGuard
+	if config != nil {
+		guard = config.Guard
+	}
 
 	var dnsResponse *dns.Msg
 	var queryErr error
-
-	// Get DNS servers in a cross-platform way
-	servers, err := getSystemDNSServers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get DNS servers: %w", err)
-	}
-
-	// Try each configured server until we get a response
 	for _, server := range servers {
-		serverAddr := server
-		if !strings.Contains(server, ":") {
-			serverAddr = net.JoinHostPort(server, "53")
+		if ctxWithTimeout.Err() != nil {
+			if queryErr == nil {
+				queryErr = ctxWithTimeout.Err()
+			}
+			break
 		}
-		dnsResponse, _, queryErr = c.Exchange(m, serverAddr)
+
+		serverAddr := formatDNSServerAddr(server)
+		if guard != nil {
+			host, _, splitErr := net.SplitHostPort(serverAddr)
+			if splitErr != nil {
+				queryErr = fmt.Errorf("invalid DNS server address %q: %w", server, splitErr)
+				continue
+			}
+			if valErr := validateServerHost(ctxWithTimeout, guard, host); valErr != nil {
+				queryErr = valErr
+				continue
+			}
+		}
+
+		dnsResponse, _, queryErr = c.ExchangeContext(ctxWithTimeout, m, serverAddr)
 		if queryErr == nil && dnsResponse != nil {
 			break
 		}
@@ -94,150 +156,220 @@ func HandleLocalDNSQuery(ctx context.Context, request mcp.CallToolRequest, confi
 	if queryErr != nil {
 		return nil, fmt.Errorf("DNS query failed: %w", queryErr)
 	}
-
 	if dnsResponse == nil {
-		return nil, fmt.Errorf("no response from DNS servers")
+		return nil, errors.New("no response from DNS servers")
 	}
 
-	// Format the response as JSON using the response package
-	result := createDNSResponse(dnsResponse)
-	return resp.JSON(result)
-}
-
-// getSystemDNSServers returns a list of system DNS servers in a cross-platform way
-func getSystemDNSServers(ctx context.Context) ([]string, error) {
-	// Use Go's pure DNS resolver implementation with a custom dialer
-	// to capture the DNS server addresses used by the system - works on all platforms
-
-	// We'll capture any DNS servers discovered during Dial
-	discoveredServers := make([]string, 0)
-
-	dialer := &net.Dialer{
-		Timeout: 5 * time.Second,
-	}
-
-	// Create a custom resolver that will capture which servers it's using
-	netResolver := &net.Resolver{
-		PreferGo: true, // Use the pure Go resolver
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			// Extract the server IP from the address (e.g., "8.8.8.8:53")
-			host, _, err := net.SplitHostPort(address)
-			if err == nil && host != "" && host != "127.0.0.1" && host != "::1" {
-				// Prevent duplicates
-				found := slices.Contains(discoveredServers, host)
-				if !found {
-					discoveredServers = append(discoveredServers, host)
-				}
-			}
-
-			// Use the standard dialer to actually make the connection
-			return dialer.DialContext(ctx, network, address)
-		},
-	}
-
-	// Use the resolver to make a real DNS query, which will call our custom Dial function
-	// The actual results don't matter - we just need to trigger the Dial function
-	// to capture DNS server addresses
-	_, _ = netResolver.LookupHost(ctx, "one.one.one.one") // Cloudflare's DNS that's likely to exist
-
-	// If we found any DNS servers through our custom dialer, return them
-	if len(discoveredServers) > 0 {
-		return discoveredServers, nil
-	}
-
-	// As a secondary fallback, try to read from /etc/resolv.conf
-	dnsConfig, err := dns.ClientConfigFromFile("/etc/resolv.conf")
-	if err == nil && len(dnsConfig.Servers) > 0 {
-		return dnsConfig.Servers, nil
-	}
-
-	// If no DNS servers were found, return an error
-	return nil, fmt.Errorf("could not discover any system DNS servers")
+	return createDNSResponse(dnsResponse), nil
 }
 
 // HandleRemoteDNSQuery processes DNS queries using DNS-over-HTTPS.
-func HandleRemoteDNSQuery(ctx context.Context, request mcp.CallToolRequest, config *QueryConfig) (*mcp.CallToolResult, error) {
-	var params dnsQueryParams
+func HandleRemoteDNSQuery(ctx context.Context, request mcp.CallToolRequest, config *QueryConfig) (*mcp.CallToolResult, error) { //nolint:gocritic // Exported handler mirrors mcp-go ToolHandlerFunc value parameter.
+	var params DNSQueryParams
 	if err := request.BindArguments(&params); err != nil {
 		return nil, fmt.Errorf("failed to parse tool input: %w", utils.ParseJSONUnmarshalError(err))
 	}
 
-	// Validate required parameters
-	if params.Domain == "" {
-		return nil, fmt.Errorf("domain parameter is required")
+	result, err := ExecuteRemote(ctx, params, config)
+	if err != nil {
+		return nil, err
+	}
+	res, err := response.JSON(result)
+	if err != nil {
+		return nil, fmt.Errorf("encode DNS response: %w", err)
+	}
+	return res, nil
+}
+
+// ExecuteRemote performs a DNS-over-HTTPS query with optional fallback to Google Public DNS.
+func ExecuteRemote(ctx context.Context, params DNSQueryParams, config *QueryConfig) (*DNSResponse, error) {
+	return executeRemoteWithServers(ctx, params, config, defaultPrimaryDoHServer, defaultFallbackDoHServer)
+}
+
+func executeRemoteWithServers(ctx context.Context, params DNSQueryParams, config *QueryConfig, primaryDefault, fallbackDefault string) (*DNSResponse, error) {
+	if ctx == nil {
+		return nil, errors.New("context must not be nil")
 	}
 
-	if params.RecordType == "" {
-		return nil, fmt.Errorf("record_type parameter is required")
-	}
-
-	// Validate domain format
-	if strings.Contains(params.Domain, "..") || strings.HasPrefix(params.Domain, ".") {
-		return nil, fmt.Errorf("invalid domain format: %s", params.Domain)
-	}
-
-	recordType, err := ConvertToQType(params.RecordType)
+	m, err := prepareDNSQuery(params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Ensure domain ends with a dot for DNS queries
-	domain := params.Domain
-	if !strings.HasSuffix(domain, ".") {
-		domain = domain + "."
+	timeout := effectiveTimeout(config)
+	var remoteAddr string
+	var guard *security.TargetGuard
+	if config != nil {
+		remoteAddr = strings.TrimSpace(config.RemoteServerAddress)
+		guard = config.Guard
 	}
 
-	// Create a new DNS message
-	m := new(dns.Msg)
-	m.SetQuestion(domain, recordType)
-	m.RecursionDesired = true
-
-	// Create HTTP client with timeout
-	httpClient := &http.Client{
-		Timeout: config.Timeout,
+	dohServer := primaryDefault
+	if remoteAddr != "" {
+		dohServer = remoteAddr
 	}
-
-	// Set timeout context
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, config.Timeout)
-	defer cancel()
-
-	// Use the specified DoH server or default to Cloudflare
-	dohServer := "https://cloudflare-dns.com/dns-query"
-	if config.RemoteServerAddress != "" {
-		dohServer = config.RemoteServerAddress
-	}
-
-	// Create DoH connection
-	conn := doh.NewConn(httpClient, ctxWithTimeout, dohServer)
-
-	// Set up DNS connection using the DoH client
-	dnsConn := &dns.Conn{Conn: conn}
-
-	// Send the query
-	err = dnsConn.WriteMsg(m)
-	if err != nil {
-		// Try Google as fallback if not using custom server
-		if config.RemoteServerAddress == "" {
-			conn = doh.NewConn(httpClient, ctxWithTimeout, "https://dns.google/dns-query")
-			dnsConn = &dns.Conn{Conn: conn}
-			err = dnsConn.WriteMsg(m)
-			if err != nil {
-				return nil, fmt.Errorf("DNS-over-HTTPS query failed: %v", err)
-			}
-		} else {
-			return nil, fmt.Errorf("DNS-over-HTTPS query failed: %v", err)
+	if guard != nil {
+		if valErr := validateDoHServerURL(ctx, guard, dohServer); valErr != nil {
+			return nil, valErr
 		}
 	}
 
-	// Read the response
-	dnsResponse, err := dnsConn.ReadMsg()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read DNS response: %v", err)
+	primaryCtx, primaryCancel := context.WithTimeout(ctx, timeout)
+	dnsResponse, err := queryDoHServer(primaryCtx, defaultDoHClient, dohServer, m)
+	primaryCancel()
+
+	if err != nil && remoteAddr == "" && ctx.Err() == nil && fallbackDefault != "" {
+		if guard != nil {
+			if valErr := validateDoHServerURL(ctx, guard, fallbackDefault); valErr != nil {
+				return nil, fmt.Errorf("primary DoH failed (%w); fallback rejected: %w", err, valErr)
+			}
+		}
+		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, timeout)
+		dnsResponse, err = queryDoHServer(fallbackCtx, defaultDoHClient, fallbackDefault, m)
+		fallbackCancel()
 	}
 
-	// Format the response as JSON using the response package
-	result := createDNSResponse(dnsResponse)
-	return resp.JSON(result)
+	if err != nil {
+		return nil, err
+	}
+	if dnsResponse == nil {
+		return nil, errors.New("no response from DoH server")
+	}
+	return createDNSResponse(dnsResponse), nil
+}
+
+func queryDoHServer(ctx context.Context, client *http.Client, serverURL string, msg *dns.Msg) (*dns.Msg, error) {
+	conn := doh.NewConn(client, ctx, serverURL)
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	dnsConn := &dns.Conn{Conn: conn}
+	if err := dnsConn.WriteMsg(msg); err != nil {
+		return nil, fmt.Errorf("DNS-over-HTTPS query failed: %w", err)
+	}
+
+	dnsResponse, err := dnsConn.ReadMsg()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DNS response: %w", err)
+	}
+	return dnsResponse, nil
+}
+
+func prepareDNSQuery(params DNSQueryParams) (*dns.Msg, error) {
+	cleanDomain, err := security.SanitizeTarget(params.Domain)
+	if err != nil {
+		return nil, fmt.Errorf("invalid domain: %w", err)
+	}
+	if strings.Contains(cleanDomain, "..") || strings.HasPrefix(cleanDomain, ".") {
+		return nil, fmt.Errorf("invalid domain format: %q", cleanDomain)
+	}
+
+	cleanType := strings.TrimSpace(params.RecordType)
+	if cleanType == "" {
+		return nil, errors.New(`parameter "record_type" is required`)
+	}
+	recordType, err := ConvertToQType(cleanType)
+	if err != nil {
+		return nil, err
+	}
+
+	fqdn := cleanDomain
+	if !strings.HasSuffix(fqdn, ".") {
+		fqdn += "."
+	}
+	m := new(dns.Msg)
+	m.SetQuestion(fqdn, recordType)
+	m.RecursionDesired = true
+	return m, nil
+}
+
+func effectiveTimeout(config *QueryConfig) time.Duration {
+	if config != nil && config.Timeout > 0 {
+		return config.Timeout
+	}
+	return defaultQueryTimeout
+}
+
+func validateDoHServerURL(ctx context.Context, guard *security.TargetGuard, rawURL string) error {
+	parseTarget := rawURL
+	if !strings.Contains(parseTarget, "://") {
+		parseTarget = "https://" + parseTarget + "/dns-query"
+	}
+	parsed, err := url.Parse(parseTarget)
+	if err != nil || parsed.Hostname() == "" {
+		return fmt.Errorf("invalid DoH server URL %q", rawURL)
+	}
+	return validateServerHost(ctx, guard, parsed.Hostname())
+}
+
+func resolveLocalServers(ctx context.Context, config *QueryConfig) ([]string, error) {
+	if config != nil && len(config.LocalServers) > 0 {
+		servers := make([]string, 0, len(config.LocalServers))
+		for _, s := range config.LocalServers {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				servers = append(servers, trimmed)
+			}
+		}
+		if len(servers) > 0 {
+			return servers, nil
+		}
+	}
+	servers, err := getSystemDNSServers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get DNS servers: %w", err)
+	}
+	return servers, nil
+}
+
+// getSystemDNSServers returns a list of system DNS servers in a cross-platform way.
+func getSystemDNSServers(ctx context.Context) ([]string, error) {
+	if servers, err := parseResolvConfServers(defaultResolvConfPath); err == nil && len(servers) > 0 {
+		return servers, nil
+	}
+
+	discoveredServers := make([]string, 0)
+	var mu sync.Mutex
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+
+	netResolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(dialCtx context.Context, network, address string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(address)
+			if err == nil && host != "" {
+				mu.Lock()
+				if !slices.Contains(discoveredServers, host) {
+					discoveredServers = append(discoveredServers, host)
+				}
+				mu.Unlock()
+			}
+			return dialer.DialContext(dialCtx, network, address)
+		},
+	}
+
+	_, _ = netResolver.LookupHost(ctx, "one.one.one.one")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(discoveredServers) > 0 {
+		return discoveredServers, nil
+	}
+	return nil, errors.New("could not discover any system DNS servers")
+}
+
+func parseResolvConfServers(path string) ([]string, error) {
+	dnsConfig, err := dns.ClientConfigFromFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+	servers := make([]string, 0, len(dnsConfig.Servers))
+	for _, s := range dnsConfig.Servers {
+		trimmed := strings.TrimSpace(s)
+		if trimmed != "" && !slices.Contains(servers, trimmed) {
+			servers = append(servers, trimmed)
+		}
+	}
+	return servers, nil
 }
 
 // ConvertToQType converts a string record type to the corresponding DNS query type.
@@ -249,199 +381,107 @@ func ConvertToQType(recordType string) (uint16, error) {
 	return 0, fmt.Errorf("unsupported record type %q", recordType)
 }
 
-// createDNSResponse creates a JSON-serializable map from a DNS message.
-func createDNSResponse(response *dns.Msg) map[string]any {
-	// Create a response structure that matches DNS public JSON spec
-	result := map[string]any{
-		"status":            response.Rcode,
-		"truncated":         response.Truncated,
-		"authenticatedData": response.AuthenticatedData,
-		"checkingDisabled":  response.CheckingDisabled,
+func createDNSResponse(msg *dns.Msg) *DNSResponse {
+	result := &DNSResponse{
+		Status:            msg.Rcode,
+		Truncated:         msg.Truncated,
+		AuthenticatedData: msg.AuthenticatedData,
+		CheckingDisabled:  msg.CheckingDisabled,
+		Question:          make([]DNSQuestion, 0, len(msg.Question)),
 	}
-
-	// Add the question section
-	questions := []map[string]interface{}{}
-	for _, q := range response.Question {
-		question := map[string]interface{}{
-			"name": q.Name,
-			"type": q.Qtype,
-		}
-
-		// Add human-readable record type name
-		if typeName, ok := dns.TypeToString[q.Qtype]; ok {
-			question["typeName"] = typeName
-		}
-
-		questions = append(questions, question)
+	for _, q := range msg.Question {
+		result.Question = append(result.Question, DNSQuestion{
+			Name:     q.Name,
+			Type:     q.Qtype,
+			TypeName: dns.TypeToString[q.Qtype],
+		})
 	}
-	result["question"] = questions
-
-	// Add the answer section
-	answers := []map[string]any{}
-	for _, a := range response.Answer {
-		// Extract the data based on record type
-		var data string
-		switch a.Header().Rrtype {
-		case dns.TypeA:
-			if rec, ok := a.(*dns.A); ok {
-				data = rec.A.String()
+	if len(msg.Answer) > 0 {
+		answers := make([]DNSAnswer, 0, len(msg.Answer))
+		for _, a := range msg.Answer {
+			if a == nil {
+				continue
 			}
-		case dns.TypeAAAA:
-			if rec, ok := a.(*dns.AAAA); ok {
-				data = rec.AAAA.String()
-			}
-		case dns.TypeCAA:
-			if rec, ok := a.(*dns.CAA); ok {
-				data = fmt.Sprintf("%d %s %q", rec.Flag, rec.Tag, rec.Value)
-			}
-		case dns.TypeCNAME:
-			if rec, ok := a.(*dns.CNAME); ok {
-				data = rec.Target
-			}
-		case dns.TypeMX:
-			if rec, ok := a.(*dns.MX); ok {
-				data = fmt.Sprintf("%d %s", rec.Preference, rec.Mx)
-			}
-		case dns.TypeNS:
-			if rec, ok := a.(*dns.NS); ok {
-				data = rec.Ns
-			}
-		case dns.TypePTR:
-			if rec, ok := a.(*dns.PTR); ok {
-				data = rec.Ptr
-			}
-		case dns.TypeSOA:
-			if rec, ok := a.(*dns.SOA); ok {
-				data = fmt.Sprintf("%s %s %d %d %d %d %d",
-					rec.Ns, rec.Mbox, rec.Serial, rec.Refresh, rec.Retry, rec.Expire, rec.Minttl)
-			}
-		case dns.TypeSRV:
-			if rec, ok := a.(*dns.SRV); ok {
-				data = fmt.Sprintf("%d %d %d %s", rec.Priority, rec.Weight, rec.Port, rec.Target)
-			}
-		case dns.TypeTXT:
-			if rec, ok := a.(*dns.TXT); ok {
-				data = strings.Join(rec.Txt, " ")
-			}
-		default:
-			// Fall back to the string representation
-			data = strings.Fields(a.String())[4]
+			hdr := a.Header()
+			answers = append(answers, DNSAnswer{
+				Name:     hdr.Name,
+				Type:     hdr.Rrtype,
+				TypeName: dns.TypeToString[hdr.Rrtype],
+				TTL:      hdr.Ttl,
+				Data:     extractRData(a),
+			})
 		}
-
-		answer := map[string]interface{}{
-			"name": a.Header().Name,
-			"type": a.Header().Rrtype,
-			"TTL":  a.Header().Ttl,
-			"data": data,
+		result.Answer = answers
+	}
+	if msg.Rcode >= 0 && msg.Rcode < len(dns.RcodeToString) {
+		result.StatusMessage = dns.RcodeToString[msg.Rcode]
+	}
+	for _, extra := range msg.Extra {
+		opt, ok := extra.(*dns.OPT)
+		if !ok {
+			continue
 		}
-
-		// Add human-readable record type name
-		if typeName, ok := dns.TypeToString[a.Header().Rrtype]; ok {
-			answer["typeName"] = typeName
-		}
-
-		answers = append(answers, answer)
-	}
-
-	if len(answers) > 0 {
-		result["answer"] = answers
-	}
-
-	// Add human-readable DNS status code
-	if response.Rcode >= 0 && response.Rcode < len(dns.RcodeToString) {
-		result["statusMessage"] = dns.RcodeToString[response.Rcode]
-	}
-
-	// Check for EDNS client subnet
-	for _, extra := range response.Extra {
-		if opt, ok := extra.(*dns.OPT); ok {
-			for _, o := range opt.Option {
-				if subnet, ok := o.(*dns.EDNS0_SUBNET); ok {
-					mask := subnet.SourceNetmask
-					result["ednsClientSubnet"] = fmt.Sprintf("%s/%d", subnet.Address.String(), mask)
-					break
-				}
+		for _, o := range opt.Option {
+			if subnet, ok := o.(*dns.EDNS0_SUBNET); ok {
+				result.EDNSClientSubnet = fmt.Sprintf("%s/%d", subnet.Address.String(), subnet.SourceNetmask)
+				return result
 			}
 		}
 	}
-
 	return result
 }
 
-// ReverseDNSBatchParams holds the inputs for batch reverse DNS lookups.
-type ReverseDNSBatchParams struct {
-	IPs       string `json:"ips"` // Comma-separated list of IP addresses
-	TimeoutMS *int   `json:"timeout_ms,omitempty"`
-}
-
-// ReverseDNSBatchResponse holds the results of batch reverse DNS lookups.
-type ReverseDNSBatchResponse struct {
-	Results   map[string]*string `json:"results"`
-	Count     int                `json:"count"`
-	Timestamp string             `json:"timestamp"`
-}
-
-// HandleReverseDNSBatch concurrently resolves PTR records for multiple IP addresses.
-func HandleReverseDNSBatch(ctx context.Context, request mcp.CallToolRequest, config *QueryConfig) (*mcp.CallToolResult, error) {
-	var params ReverseDNSBatchParams
-	if err := request.BindArguments(&params); err != nil {
-		return nil, fmt.Errorf("failed to parse tool input: %w", utils.ParseJSONUnmarshalError(err))
-	}
-
-	rawIPs := strings.FieldsFunc(params.IPs, func(r rune) bool {
-		return r == ',' || r == '\n' || r == ' ' || r == '\t' || r == ';'
-	})
-
-	if len(rawIPs) == 0 {
-		return nil, fmt.Errorf("parameter \"ips\" cannot be empty")
-	}
-
-	timeout := 3 * time.Second
-	if params.TimeoutMS != nil && *params.TimeoutMS > 100 && *params.TimeoutMS <= 10000 {
-		timeout = time.Duration(*params.TimeoutMS) * time.Millisecond
-	}
-
-	results := make(map[string]*string)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 20) // max 20 concurrent lookups
-
-	for _, rawIP := range rawIPs {
-		ipStr := strings.TrimSpace(rawIP)
-		if ipStr == "" {
-			continue
+func extractRData(rr dns.RR) string {
+	switch rr.Header().Rrtype {
+	case dns.TypeA:
+		if rec, ok := rr.(*dns.A); ok && rec.A != nil {
+			return rec.A.String()
 		}
-
-		wg.Add(1)
-		go func(targetIP string) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			resolver := &net.Resolver{}
-			lookupCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-
-			names, err := resolver.LookupAddr(lookupCtx, targetIP)
-			mu.Lock()
-			defer mu.Unlock()
-
-			if err == nil && len(names) > 0 {
-				host := strings.TrimSuffix(names[0], ".")
-				results[targetIP] = &host
-			} else {
-				results[targetIP] = nil
-			}
-		}(ipStr)
+	case dns.TypeAAAA:
+		if rec, ok := rr.(*dns.AAAA); ok && rec.AAAA != nil {
+			return rec.AAAA.String()
+		}
+	case dns.TypeCAA:
+		if rec, ok := rr.(*dns.CAA); ok {
+			return fmt.Sprintf("%d %s %q", rec.Flag, rec.Tag, rec.Value)
+		}
+	case dns.TypeCNAME:
+		if rec, ok := rr.(*dns.CNAME); ok {
+			return rec.Target
+		}
+	case dns.TypeMX:
+		if rec, ok := rr.(*dns.MX); ok {
+			return fmt.Sprintf("%d %s", rec.Preference, rec.Mx)
+		}
+	case dns.TypeNS:
+		if rec, ok := rr.(*dns.NS); ok {
+			return rec.Ns
+		}
+	case dns.TypePTR:
+		if rec, ok := rr.(*dns.PTR); ok {
+			return rec.Ptr
+		}
+	case dns.TypeSOA:
+		if rec, ok := rr.(*dns.SOA); ok {
+			return fmt.Sprintf("%s %s %d %d %d %d %d",
+				rec.Ns, rec.Mbox, rec.Serial, rec.Refresh, rec.Retry, rec.Expire, rec.Minttl)
+		}
+	case dns.TypeSRV:
+		if rec, ok := rr.(*dns.SRV); ok {
+			return fmt.Sprintf("%d %d %d %s", rec.Priority, rec.Weight, rec.Port, rec.Target)
+		}
+	case dns.TypeTXT:
+		if rec, ok := rr.(*dns.TXT); ok {
+			return strings.Join(rec.Txt, " ")
+		}
+	default:
+		fields := strings.Fields(rr.String())
+		if len(fields) >= 5 {
+			return strings.Join(fields[4:], " ")
+		}
+		if len(fields) > 0 {
+			return strings.Join(fields, " ")
+		}
 	}
-
-	wg.Wait()
-
-	response := ReverseDNSBatchResponse{
-		Results:   results,
-		Count:     len(results),
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-	}
-
-	return resp.JSON(response)
+	return ""
 }

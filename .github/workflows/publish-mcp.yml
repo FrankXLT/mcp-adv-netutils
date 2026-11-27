@@ -1,0 +1,233 @@
+name: Publish GHCR OCI, MCP Registry & Pages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional version tag to publish (e.g. v1.0.0). Defaults to pushed tag or server.json version."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  pages: write
+
+env:
+  MCP_PUBLISHER_VERSION: v1.8.1
+
+jobs:
+  publish:
+    name: Test, Push Multi-Arch OCI, Publish MCP & Stage Pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag && (startsWith(inputs.release_tag, 'v') && format('refs/tags/{0}', inputs.release_tag) || format('refs/tags/v{0}', inputs.release_tag)) || github.ref }}
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run unit tests with race detector
+        run: go test -race ./...
+
+      - name: Resolve release version and lowercase GHCR image name
+        id: meta
+        env:
+          RAW_INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          RAW_TAG="${RAW_INPUT_TAG}"
+          if [ -z "$RAW_TAG" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$RAW_TAG" ]; then
+            RAW_TAG="$(jq -r '.version // empty' server.json)"
+          fi
+          VERSION="${RAW_TAG#v}"
+          if [ -z "$VERSION" ]; then
+            echo "Unable to resolve release version" >&2
+            exit 1
+          fi
+          IMAGE_REPO="$(printf 'ghcr.io/%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$VERSION" == *-* ]]; then
+            IS_STABLE="false"
+          else
+            IS_STABLE="true"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
+          echo "is_stable=$IS_STABLE" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test Docker --stdio JSON-RPC container locally
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          IMAGE="${{ steps.meta.outputs.image_repo }}:${VERSION}"
+          docker build --build-arg "VERSION=${VERSION}" -t "$IMAGE" .
+          python3 - "$IMAGE" <<'PY'
+          import json, select, subprocess, sys, time
+          image = sys.argv[1]
+          reqs = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "ci-smoke", "version": "1.0"}}},
+              {"jsonrpc": "2.0", "method": "notifications/initialized"},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+              {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "mac_vendor_lookup", "arguments": {"mac": "00:00:5E:00:53:10"}}},
+          ]
+          proc = subprocess.Popen(
+              ["docker", "run", "--rm", "-i", image, "--stdio"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              text=True,
+          )
+          for req in reqs[:2]:
+              proc.stdin.write(json.dumps(req) + "\n")
+          proc.stdin.flush()
+          for req in reqs[2:]:
+              proc.stdin.write(json.dumps(req) + "\n")
+          proc.stdin.flush()
+          parsed = {}
+          deadline = time.monotonic() + 25.0
+          while len(parsed) < 3 and time.monotonic() < deadline:
+              ready, _, _ = select.select([proc.stdout], [], [], max(0.1, deadline - time.monotonic()))
+              if not ready:
+                  break
+              line = proc.stdout.readline()
+              if not line:
+                  break
+              if line.strip():
+                  msg = json.loads(line)
+                  assert msg.get("jsonrpc") == "2.0", msg
+                  if "id" in msg:
+                      parsed[msg["id"]] = msg
+          proc.stdin.close()
+          stderr = proc.stderr.read()
+          assert proc.wait(timeout=15) == 0, stderr
+          assert set(parsed.keys()) >= {1, 2, 3}, (parsed, stderr)
+          assert "result" in parsed[1], parsed[1]
+          tools = parsed[2]["result"]["tools"]
+          assert len(tools) > 0, parsed[2]
+          assert "mac_vendor_lookup" in {t["name"] for t in tools}
+          call_res = parsed[3]["result"]
+          assert not call_res.get("isError", False), call_res
+          assert len(call_res["content"][0]["text"].strip()) > 0, call_res
+          print(f"Docker stdio smoke test OK ({len(tools)} tools)")
+          PY
+
+      - name: Set up QEMU
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push GHCR OCI image
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ${{ steps.meta.outputs.image_repo }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.is_stable == 'true' && format('{0}:latest', steps.meta.outputs.image_repo) || '' }}
+
+      - name: Install Cosign
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Download and verify mcp-publisher
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          archive="mcp-publisher_${os}_${arch}.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+
+          curl --fail --location --silent --show-error --output "$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+          chmod +x mcp-publisher
+          rm -f "$archive" "$archive.sigstore.json"
+
+      - name: Sync and validate server.json
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          IMAGE="${{ steps.meta.outputs.image_repo }}:${VERSION}"
+          jq --arg v "$VERSION" --arg img "$IMAGE" \
+            '.version = $v | .packages[0].identifier = $img' server.json > server.tmp
+          mv server.tmp server.json
+          ./mcp-publisher validate
+
+      - name: Authenticate to MCP Registry via GitHub OIDC
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: ./mcp-publisher publish
+
+      - name: Build static GitHub Pages showcase
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          python3 scripts/build_github_showcase.py --out build/gh-pages
+          test -f build/gh-pages/.nojekyll
+          test -f build/gh-pages/demo/index.html
+
+      - name: Configure GitHub Pages
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/gh-pages
+
+  deploy-pages:
+    name: Deploy GitHub Pages
+    needs: publish
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
