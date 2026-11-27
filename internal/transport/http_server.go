@@ -298,9 +298,24 @@ func (rt *transportRouter) handleHealthz(w http.ResponseWriter, r *http.Request)
 
 func (rt *transportRouter) handleWebRedirect(w http.ResponseWriter, r *http.Request) {
 	setWebSecurityHeaders(w)
+	q := r.URL.Query()
+	var parts []string
+	if q.Get("demo") == "1" {
+		parts = append(parts, "demo=1")
+	}
+	switch q.Get("theme") {
+	case "white":
+		parts = append(parts, "theme=white")
+	case "paper":
+		parts = append(parts, "theme=paper")
+	case "dark-paper":
+		parts = append(parts, "theme=dark-paper")
+	case "dark":
+		parts = append(parts, "theme=dark")
+	}
 	target := "/web/"
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
+	if len(parts) > 0 {
+		target += "?" + strings.Join(parts, "&")
 	}
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }

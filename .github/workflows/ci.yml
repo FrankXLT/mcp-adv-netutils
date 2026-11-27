@@ -37,11 +37,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install traceroute system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends traceroute
+
       - name: Run GolangCI-Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
-          args: --config=golangci.yaml
+          version: v2.15.0
+          args: --config=golangci.yaml --max-issues-per-linter=0 --max-same-issues=0
 
       - name: Run unit tests with race detector & enforce >= 80% coverage
         run: |

@@ -318,6 +318,7 @@ func (h *studioHandler) setSessionCookie(w http.ResponseWriter, r *http.Request,
 	if maxAge < 1 {
 		maxAge = 1
 	}
+	// #nosec G124 -- HttpOnly and SameSiteStrictMode are enforced; Secure adapts to TLS/HTTPS so LAN HTTP works.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    h.signSessionCookie(expiresAt, h.deadbolt.UnlockEpoch()),
@@ -331,6 +332,7 @@ func (h *studioHandler) setSessionCookie(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *studioHandler) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- HttpOnly and SameSiteStrictMode are enforced; Secure adapts to TLS/HTTPS so LAN HTTP works.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",

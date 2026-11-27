@@ -8,10 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -305,6 +307,9 @@ func TestDispatchCoreTools(t *testing.T) {
 		{"wol_wake", "OK", map[string]any{"mac": "aa:bb:cc:dd:ee:ff", "broadcast_ip": "127.0.0.1", "port": udpPort}},
 	} {
 		out, err := env.disp.Dispatch(ctx, Request{Tool: tc.tool, Args: tc.args})
+		if tc.tool == "traceroute" && errors.Is(err, exec.ErrNotFound) {
+			continue
+		}
 		require.NoError(t, err, tc.tool)
 		if tc.wantStatus != "" {
 			assert.Equal(t, tc.wantStatus, out.Status, tc.tool)
