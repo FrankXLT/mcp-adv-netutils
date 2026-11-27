@@ -1,4 +1,4 @@
-# Advanced Network Utilities (`mcp-adv-netutils`) v1.0
+# Advanced Network Utilities (`mcp-adv-netutils`) v2.0.0
 
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Ffrankxlt%2Fmcp--adv--netutils-blue?logo=docker)](https://github.com/FrankXLT/mcp-adv-netutils/pkgs/container/mcp-adv-netutils)
 [![Project Showcase](https://img.shields.io/badge/OAW%20Projects-Overview%20%7C%20Demo%20%7C%20Docs-2563eb)](https://projects.oaworkbench.org/mcp-adv-netutils/)
@@ -10,7 +10,7 @@
 
 ---
 
-## What's New in v1.0
+## What's New in v2.0.0
 
 - **Zero Node.js / Zero `supergateway` Runtime**: Ships as a single static `CGO_ENABLED=0` Go binary inside a single-layer Alpine container (`~41.5 MB` unpacked / `~11.4 MB` compressed, `USER netutils`, `setcap cap_net_raw+ep` via `RUN --mount=type=bind`), serving native `--stdio`, Streamable HTTP, backward-compatible `/sse`, `/web`, and `/healthz`.
 - **33 Registered MCP Tools**: Combines 12 hardened core tools, 6 active L2–L7 probes, 8 coordinated Diagnostic Recipes (`recipe_*`), `render_run_digest`, 4 Cron, Saved Destinations & Archive tools (adding `manage_saved_destinations`), and `unlock_netutils`/`lock_netutils`.
@@ -24,11 +24,11 @@
 
 ## MCP Tool Suite
 
-`mcp-adv-netutils` v1.0 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
+`mcp-adv-netutils` v2.0.0 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
 
 ### 1. Hardened Core Tools (12)
 
-| Tool | Layer | Capabilities & v1.0 Hardening |
+| Tool | Layer | Capabilities & v2.0.0 Hardening |
 | :--- | :--- | :--- |
 | **`mac_vendor_lookup`** | L2 | Embedded `39,800+` IEEE OUI lookup; separates physical `[UAA]` from Docker/VM `[LAA]` (`02:42:...`) |
 | **`ping`** | L3 | Per-call Echo ID/sequence isolation, IPv4/IPv6 TTL control messages, explicit `probe_mode` (`icmp` vs `tcp_fallback`) |

@@ -41,7 +41,7 @@ type NetUtilsConfig struct {
 
 const (
 	serverTitle    = "Advanced Network Utilities"
-	defaultVersion = "1.0.0"
+	defaultVersion = "2.0.0"
 	defaultStyle   = "default"
 )
 

@@ -55,7 +55,7 @@ func TestSetupServerRegistersAll33ToolsAndDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, srv)
 	require.NotNil(t, disp)
-	assert.Equal(t, "1.0.0", disp.Version())
+	assert.Equal(t, "2.0.0", disp.Version())
 
 	tools := srv.ListTools()
 	canonical := disp.ToolNames()

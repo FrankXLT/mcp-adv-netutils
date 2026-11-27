@@ -8,11 +8,11 @@
     "source": "github"
   },
   "websiteUrl": "https://projects.oaworkbench.org/mcp-adv-netutils/",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/frankxlt/mcp-adv-netutils:1.0.0",
+      "identifier": "ghcr.io/frankxlt/mcp-adv-netutils:2.0.0",
       "transport": {
         "type": "stdio"
       },

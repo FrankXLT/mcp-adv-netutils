@@ -246,4 +246,4 @@ AI coding and operations agents need concise, deterministic behavioral playbooks
 
 ### Verification Invariants
 - All 5 `skills/*/SKILL.md` files match implemented tool names (`33` total MCP tools), flags, and security boundaries (`PASS_HASH`, `169.254.0.0/16` block).
-- Wave 4 passive capture remains cleanly scoped to `ROADMAP.md` (not claimed as active in v1.0 runtime).
+- Wave 4 passive capture remains cleanly scoped to `ROADMAP.md` (not claimed as active in v2.0.0 runtime).

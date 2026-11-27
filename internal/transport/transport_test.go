@@ -22,7 +22,7 @@ import (
 const testPathSecret = "0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func newTestMCPServer() *server.MCPServer {
-	s := server.NewMCPServer("test-netutils", "1.0.0")
+	s := server.NewMCPServer("test-netutils", "2.0.0")
 	s.AddTool(mcp.NewTool("test_ping", mcp.WithDescription("test tool")),
 		func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("pong"), nil
@@ -233,7 +233,7 @@ func TestHTTPHandler_RemoteDoorway(t *testing.T) {
 	t.Parallel()
 
 	h, err := transport.NewHTTPHandler(transport.HTTPConfig{
-		Version:    "1.0.0",
+		Version:    "2.0.0",
 		MCPServer:  newTestMCPServer(),
 		PathSecret: testPathSecret,
 	})
@@ -280,7 +280,7 @@ func TestHTTPHandler_LANDoorwayAndSSECompat(t *testing.T) {
 	assert.Equal(t, derivedToken, transport.DeriveLANToken(testPathSecret))
 
 	h, err := transport.NewHTTPHandler(transport.HTTPConfig{
-		Version:         "1.0.0",
+		Version:         "2.0.0",
 		MCPServer:       newTestMCPServer(),
 		PathSecret:      testPathSecret,
 		EnableSSECompat: true,
@@ -413,7 +413,7 @@ func TestHTTPHandler_WebPathNormalization(t *testing.T) {
 
 	called := false
 	h, err := transport.NewHTTPHandler(transport.HTTPConfig{
-		Version:   "1.0.0",
+		Version:   "2.0.0",
 		MCPServer: newTestMCPServer(),
 		WebHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			called = true
