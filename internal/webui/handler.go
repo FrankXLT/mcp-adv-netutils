@@ -76,6 +76,8 @@ var assetsFS embed.FS
 
 // NewHandler constructs the Operator Studio HTTP handler serving embedded static
 // assets and the /api/* JSON endpoints (with /web prefix already stripped).
+//
+//nolint:gocritic // hugeParam: Config value signature preserves public webui.NewHandler contract.
 func NewHandler(cfg Config) (http.Handler, error) {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
@@ -212,7 +214,7 @@ func (h *studioHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := h.deadbolt.Status()
-	authorized, expUnix := h.isSessionAuthorized(w, r, st)
+	authorized, expUnix := h.isSessionAuthorized(w, r, &st)
 	if authorized && !st.ExpiresAt.IsZero() && st.ExpiresAt.Unix() > expUnix+sessionRefreshThreshold {
 		h.setSessionCookieWithEpoch(w, r, st.ExpiresAt, st.UnlockEpoch)
 	}
@@ -303,7 +305,7 @@ func (h *studioHandler) isUnlocked(w http.ResponseWriter, r *http.Request) bool 
 		return true
 	}
 	st := h.deadbolt.Status()
-	authorized, expUnix := h.isSessionAuthorized(w, r, st)
+	authorized, expUnix := h.isSessionAuthorized(w, r, &st)
 	if !authorized {
 		return false
 	}
@@ -337,8 +339,8 @@ func (h *studioHandler) requireUnlocked(w http.ResponseWriter, r *http.Request) 
 	return false
 }
 
-func (h *studioHandler) isSessionAuthorized(w http.ResponseWriter, r *http.Request, st security.DeadboltStatus) (bool, int64) {
-	if !st.Unlocked || st.UnlockEpoch == 0 {
+func (h *studioHandler) isSessionAuthorized(w http.ResponseWriter, r *http.Request, st *security.DeadboltStatus) (bool, int64) {
+	if st == nil || !st.Unlocked || st.UnlockEpoch == 0 {
 		if _, err := r.Cookie(sessionCookieName); err == nil {
 			h.clearSessionCookie(w, r)
 		}
