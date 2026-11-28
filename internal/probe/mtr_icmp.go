@@ -280,17 +280,6 @@ func extractICMPWaveReply(rm *icmp.Message, isIPv4 bool, peerIP, targetStr strin
 	return 0, 0, false, false
 }
 
-func matchICMPMTRReply(rm *icmp.Message, isIPv4 bool, probeID, seq int, peerIP, targetIP string) (bool, bool) {
-	id, embeddedSeq, reached, valid := extractICMPWaveReply(rm, isIPv4, peerIP, targetIP)
-	if !valid || id != probeID || embeddedSeq != seq {
-		return false, false
-	}
-	if rm.Type == ipv4.ICMPTypeEchoReply || rm.Type == ipv6.ICMPTypeEchoReply {
-		return true, true
-	}
-	return true, reached
-}
-
 func extractEmbeddedEchoIDSeq(data []byte, isIPv4 bool) (int, int, bool) {
 	if isIPv4 {
 		if len(data) < ipv4HeaderLen {

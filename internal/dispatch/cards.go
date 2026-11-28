@@ -443,16 +443,6 @@ func overallAlertStatus(alertsActive, pendingWarn int) string {
 	return statusOK
 }
 
-func worstStatusVal(a, b string) string {
-	if a == statusFAIL || b == statusFAIL {
-		return statusFAIL
-	}
-	if a == statusWARN || b == statusWARN {
-		return statusWARN
-	}
-	return statusOK
-}
-
 func formatUnixTime(sec int64) string {
 	if sec <= 0 {
 		return ""

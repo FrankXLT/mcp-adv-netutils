@@ -88,29 +88,10 @@ func buildTracerouteExec(res *traceroute.TracerouteResponse, durMS int64) *toolE
 	}
 	return makeExecCard(&cardSpec{
 		tool: "traceroute", title: "TRACEROUTE", subtitle: res.ProbeMode, target: res.Target, status: status, durMS: durMS, raw: res,
-		summary: formatTracerouteVerdict(res),
+		summary: formatTracerouteSummary(res),
 		metrics: []ascii.MetricKV{{Label: "Resolved IP", Value: res.ResolvedIP}, {Label: "Hops", Value: strconv.Itoa(len(res.Hops))}, {Label: "Reached", Value: strconv.FormatBool(res.ReachedDestination)}},
 		headers: []string{"Hop", "IP", "Host", "Avg"}, rows: rows, spark: spark, health: health, whiskers: whiskers,
 	})
-}
-
-func formatTracerouteVerdict(res *traceroute.TracerouteResponse) string {
-	n := len(res.Hops)
-	if n == 0 {
-		return fmt.Sprintf("Route trace to %s returned no responding hops", res.Target)
-	}
-	hopWord, mode := pluralWord(n, "hop", "hops"), firstNonEmpty(res.ProbeMode, "icmp")
-	if !res.ReachedDestination {
-		return fmt.Sprintf("Traced %d %s toward %s via %s without reaching destination", n, hopWord, res.Target, mode)
-	}
-	msg := fmt.Sprintf("Reached %s in %d %s via %s", res.Target, n, hopWord, mode)
-	if last := res.Hops[n-1]; !last.TimedOut && last.AvgRTTMs > 0 {
-		msg += fmt.Sprintf(" (%.1f ms final hop)", last.AvgRTTMs)
-	}
-	if res.SilentTransitHops > 0 {
-		msg += fmt.Sprintf("; %d silent transit %s flowing", res.SilentTransitHops, pluralWord(res.SilentTransitHops, "router", "routers"))
-	}
-	return msg
 }
 
 func buildHTTPWaterfall(dnsMs, connMs, tlsMs, ttfbMs, totalMs float64) []WaterfallPhase {
@@ -138,7 +119,7 @@ func buildRecipeExec(_ string, res *recipes.RecipeResult, target string, durMS i
 	}
 	switch v := res.Data.(type) {
 	case recipes.DiffPingData:
-		exec.Whiskers, exec.Waterfall = extractDiffPingCharts(&v)
+		exec.Whiskers = extractDiffPingCharts(&v)
 	case recipes.DiffDNSData:
 		exec.DNSComparisons = extractSplitDNSComparisons(v.Comparisons)
 		if v.SystemResolver != nil {
@@ -169,8 +150,11 @@ func buildRecipeExec(_ string, res *recipes.RecipeResult, target string, durMS i
 		exec.LANInventory = extractLANInventory(&v, now)
 	case recipes.PathAutopsyData:
 		exec.Whiskers = extractPathAutopsyWhiskers(&v)
+		exec.Summary = formatPathAutopsySummary(&v)
 	case recipes.WakeVerifyData:
 		exec.Waterfall = []WaterfallPhase{{Label: "Wake-to-Ready", StartMs: 0, DurationMs: float64(v.WakeToReadyM), IsTotal: true}}
+	case recipes.DigestData:
+		exec.Summary = formatRenderDigestSummary(&v)
 	}
 	if exec.Card != nil && exec.Card.DurationMS <= 0 {
 		exec.Card.DurationMS = durMS
@@ -311,7 +295,7 @@ func resolverDNSRow(res *resolver.ResolverResponse) DNSComparisonRow {
 	return DNSComparisonRow{Resolver: "System Resolver", Answers: answers, Status: st, Match: match}
 }
 
-func extractDiffPingCharts(data *recipes.DiffPingData) ([]WhiskerPoint, []WaterfallPhase) {
+func extractDiffPingCharts(data *recipes.DiffPingData) []WhiskerPoint {
 	whiskers := make([]WhiskerPoint, 0, len(data.Hops))
 	for i := range data.Hops {
 		h := &data.Hops[i]
@@ -320,7 +304,7 @@ func extractDiffPingCharts(data *recipes.DiffPingData) ([]WhiskerPoint, []Waterf
 			MinMs: h.AvgRTTMs, AvgMs: h.AvgRTTMs, MaxMs: h.AvgRTTMs, LossPct: h.LossPct,
 		})
 	}
-	return whiskers, nil
+	return whiskers
 }
 
 func extractSnapshotDiff(data *recipes.DiffSnapshotData, now time.Time) *SnapshotDiffView {
@@ -389,15 +373,17 @@ func extractPathAutopsyWhiskers(data *recipes.PathAutopsyData) []WhiskerPoint {
 
 func tracerouteHopWhisker(h *traceroute.HopResult, isDest bool, destLoss float64) (WhiskerPoint, string) {
 	hst, loss := statusOK, 0.0
-	if h.Silent {
+	switch {
+	case h.Silent:
 		hst, loss = statusINFO, 100
-	} else if h.TimedOut {
+	case h.TimedOut:
 		hst, loss = statusWARN, 100
-	} else if isDest && destLoss > 0 {
+	case isDest && destLoss > 0:
 		loss = destLoss
-		if destLoss >= 50 {
+		switch {
+		case destLoss >= 50:
 			hst = statusFAIL
-		} else if destLoss >= 20 {
+		case destLoss >= 20:
 			hst = statusWARN
 		}
 	}

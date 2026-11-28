@@ -129,14 +129,15 @@ func convertMTRToTraceroute(mtr *probe.MTRResult, target, resolvedIP string, max
 	}
 
 	hops := make([]HopResult, 0, len(mtr.Hops))
-	for _, mh := range mtr.Hops {
+	for i := range mtr.Hops {
+		mh := &mtr.Hops[i]
 		var rtts []float64
 		if mh.Received == 2 && (mh.BestMs > 0 || mh.WorstMs > 0) {
 			rtts = []float64{mh.BestMs, mh.WorstMs}
 		} else if mh.Received > 0 {
 			rtts = make([]float64, mh.Received)
-			for i := range rtts {
-				rtts[i] = mh.AvgMs
+			for j := range rtts {
+				rtts[j] = mh.AvgMs
 			}
 		}
 		hops = append(hops, HopResult{

@@ -298,6 +298,7 @@ func buildMTRExec(res *probe.MTRResult, durMS int64) *toolExec {
 	case destLoss >= 20:
 		status = statusWARN
 	}
+	hasIssue := false
 	for i := range res.Hops {
 		h, st := &res.Hops[i], statusOK
 		switch {
@@ -305,8 +306,10 @@ func buildMTRExec(res *probe.MTRResult, durMS int64) *toolExec {
 			st = statusINFO
 		case h.LossPct >= 50:
 			st = statusFAIL
+			hasIssue = true
 		case h.LossPct >= 20 || h.StDevMs >= 20:
 			st = statusWARN
+			hasIssue = true
 		}
 		rows = append(rows, ascii.TableRow{Status: st, Cells: []string{strconv.Itoa(h.Hop), h.IP, fmt.Sprintf("%.0f%%", h.LossPct), fmt.Sprintf("%.2f", h.AvgMs), fmt.Sprintf("%.2f", h.StDevMs)}})
 		spark, health = append(spark, h.AvgMs), append(health, st)
@@ -317,27 +320,10 @@ func buildMTRExec(res *probe.MTRResult, durMS int64) *toolExec {
 	}
 	return makeExecCard(&cardSpec{
 		tool: "mtr_path_quality", title: "MTR PATH QUALITY", subtitle: res.ProbeMode, target: res.Target, status: status, durMS: durMS, raw: res,
-		summary: formatMTRVerdict(res, destLoss),
+		summary: formatMTRSummary(res, status != statusOK || hasIssue),
 		metrics: []ascii.MetricKV{{Label: "Cycles", Value: strconv.Itoa(res.Cycles)}, {Label: "Hops", Value: strconv.Itoa(len(res.Hops))}, {Label: "Reached", Value: strconv.FormatBool(res.Reached)}},
 		headers: []string{"Hop", "IP", "Loss%", "Avg", "StDev"}, rows: rows, spark: spark, health: health, whiskers: whiskers,
 	})
-}
-
-func formatMTRVerdict(res *probe.MTRResult, destLoss float64) string {
-	n := len(res.Hops)
-	mode := firstNonEmpty(res.ProbeMode, "icmp")
-	if !res.Reached && n == 0 {
-		return fmt.Sprintf("Path quality trace (%s) to %s returned no responding hops", mode, res.Target)
-	}
-	hopWord := pluralWord(n, "hop", "hops")
-	if !res.Reached {
-		return fmt.Sprintf("Traced %d %s toward %s via %s without reaching destination (%.0f%% dest loss)", n, hopWord, res.Target, mode, destLoss)
-	}
-	verdict := fmt.Sprintf("Reached %s in %d %s via %s (%.0f%% dest loss)", res.Target, n, hopWord, mode, destLoss)
-	if res.SilentTransitHops > 0 {
-		verdict += fmt.Sprintf("; %d silent transit %s flowing", res.SilentTransitHops, pluralWord(res.SilentTransitHops, "router", "routers"))
-	}
-	return verdict
 }
 
 func buildDiscoverExec(res *probe.DiscoverResult, durMS int64) *toolExec {

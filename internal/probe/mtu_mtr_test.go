@@ -364,6 +364,17 @@ func TestComputeMTRHopStats(t *testing.T) {
 	assert.InDelta(t, math.Sqrt(50.0), partial.StDevMs, 1e-9)
 }
 
+func matchICMPMTRReply(rm *icmp.Message, isIPv4 bool, probeID, seq int, peerIP, targetIP string) (bool, bool) {
+	id, embeddedSeq, reached, valid := extractICMPWaveReply(rm, isIPv4, peerIP, targetIP)
+	if !valid || id != probeID || embeddedSeq != seq {
+		return false, false
+	}
+	if rm.Type == ipv4.ICMPTypeEchoReply || rm.Type == ipv6.ICMPTypeEchoReply {
+		return true, true
+	}
+	return true, reached
+}
+
 func TestExtractEmbeddedEchoAndMatchICMPMTRReply(t *testing.T) {
 	t.Parallel()
 

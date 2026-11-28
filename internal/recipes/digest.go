@@ -149,6 +149,8 @@ const (
 )
 
 // ExecuteRenderRunDigest loads stored JobRecords by IDs or time-window/status filters and builds a consolidated ReportCard.
+//
+//nolint:gocritic // Exported recipe signature accepts RenderDigestParams by value.
 func ExecuteRenderRunDigest(ctx context.Context, deps Dependencies, params RenderDigestParams) (*RecipeResult, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
@@ -158,17 +160,17 @@ func ExecuteRenderRunDigest(ctx context.Context, deps Dependencies, params Rende
 	}
 
 	started := time.Now().UTC()
-	parsed, err := parseDigestWindowAndBounds(params, started)
+	parsed, err := parseDigestWindowAndBounds(&params, started)
 	if err != nil {
 		return nil, err
 	}
-	jobs, winSummary, err := loadDigestJobsAndSummary(ctx, deps.Store, parsed)
+	jobs, winSummary, err := loadDigestJobsAndSummary(ctx, deps.Store, &parsed)
 	if err != nil {
 		return nil, err
 	}
 
-	data := buildDigestData(jobs, winSummary, parsed)
-	metrics, notes, summary, overall := buildDigestCardDecorations(data)
+	data := buildDigestData(jobs, winSummary, &parsed)
+	metrics, notes, summary, overall := buildDigestCardDecorations(&data)
 	rows := make([]ascii.TableRow, 0, len(data.Jobs))
 	spark := make([]float64, 0, len(data.Jobs))
 	health := make([]string, 0, len(data.Jobs))
@@ -317,6 +319,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func goRun(g *errgroup.Group, fn func()) {
+	g.Go(func() error { fn(); return nil })
+}
+
+func intPtr(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 func resolveRecipeTarget(ctx context.Context, rawTarget string, guard *security.TargetGuard) (net.IP, string, error) {

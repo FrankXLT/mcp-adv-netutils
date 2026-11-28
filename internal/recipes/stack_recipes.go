@@ -177,8 +177,7 @@ func ExecuteLANRadar(ctx context.Context, deps Dependencies, params LANRadarPara
 		return nil, fmt.Errorf("LAN ARP sweep failed: %w", arpErr)
 	}
 	phys, virt, rows, health := buildLANRadarRows(arpRes, discRes)
-	var notes []string
-	discWarn, status, services := "", StatusOK, []probe.DiscoveredService(nil)
+	discWarn, status, services, notes := "", StatusOK, []probe.DiscoveredService(nil), []string(nil)
 	if discErr != nil {
 		discWarn, status, notes = discErr.Error(), StatusWARN, append(notes, "Service discovery warning: "+discErr.Error())
 	}
@@ -230,13 +229,17 @@ func ExecutePathAutopsy(ctx context.Context, deps Dependencies, params PathAutop
 	if data.MTU != nil {
 		summary += fmt.Sprintf(", MTU=%d (WG=%d)", data.MTU.DiscoveredMTU, data.MTU.WireGuardSafeMTU)
 	}
-	metrics := []ascii.MetricKV{
-		{Label: "IP", Value: data.ResolvedIP}, {Label: "Probe Mode", Value: firstNonEmpty(data.ProbeMode, "unknown")}, {Label: "Dest Loss", Value: fmt.Sprintf("%.0f%%", data.DestLossPct)},
-		{Label: "Silent Transit", Value: strconv.Itoa(data.SilentTransitHops)}, {Label: "Loss Hops", Value: strconv.Itoa(len(data.LossHops))}, {Label: "Blackhole", Value: strconv.FormatBool(data.Blackhole)},
-	}
 	return makeRecipeResult(&cardSpec{
 		ToolName: "path_autopsy", Title: "PATH AUTOPSY", Subtitle: "MTR + PMTUD + Trace", Target: cleanTarget, Status: status, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
-		Metrics: metrics, Headers: []string{"Hop", "IP", "Loss%", "AvgMs", "StDev", "Flag"}, Rows: rows, SparkValues: spark, HealthStates: health, Notes: notes, RawData: data,
+		Metrics: []ascii.MetricKV{
+			{Label: "IP", Value: data.ResolvedIP},
+			{Label: "Probe Mode", Value: firstNonEmpty(data.ProbeMode, "unknown")},
+			{Label: "Dest Loss", Value: fmt.Sprintf("%.0f%%", data.DestLossPct)},
+			{Label: "Silent Transit", Value: strconv.Itoa(data.SilentTransitHops)},
+			{Label: "Loss Hops", Value: strconv.Itoa(len(data.LossHops))},
+			{Label: "Blackhole", Value: strconv.FormatBool(data.Blackhole)},
+		},
+		Headers: []string{"Hop", "IP", "Loss%", "AvgMs", "StDev", "Flag"}, Rows: rows, SparkValues: spark, HealthStates: health, Notes: notes, RawData: data,
 	}), nil
 }
 
@@ -277,17 +280,6 @@ func ExecuteWakeVerify(ctx context.Context, deps Dependencies, params WakeVerify
 		},
 		RawData: WakeVerifyData{MAC: wolRes.Normalized, Target: params.Target, Ready: ready, ReadyVia: readyVia, WakeToReadyM: elapsedMS, Attempts: attempts, WOL: wolRes, LastPing: lastPing, LastPortScan: lastScan},
 	}), nil
-}
-
-func goRun(g *errgroup.Group, fn func()) {
-	g.Go(func() error { fn(); return nil })
-}
-
-func intPtr(v int) *int {
-	if v <= 0 {
-		return nil
-	}
-	return &v
 }
 
 func runHostCardUpperLayers(ctx context.Context, deps Dependencies, params *HostCardParams, target string, data *HostCardData) {
@@ -379,24 +371,26 @@ func buildLANRadarRows(arpRes *probe.ARPSweepResult, discRes *probe.DiscoverResu
 	var rows, virtRows []ascii.TableRow
 	var health, virtHealth []string
 	if arpRes != nil {
-		for _, n := range arpRes.Neighbors {
+		for i := range arpRes.Neighbors {
+			n := &arpRes.Neighbors[i]
 			if n.IsLAA {
-				virt, virtRows, virtHealth = append(virt, n), append(virtRows, ascii.TableRow{Status: StatusINFO, Cells: []string{groupLabelVirtualLAA, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(virtHealth, StatusINFO)
+				virt, virtRows, virtHealth = append(virt, *n), append(virtRows, ascii.TableRow{Status: StatusINFO, Cells: []string{groupLabelVirtualLAA, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(virtHealth, StatusINFO)
 			} else {
-				phys, rows, health = append(phys, n), append(rows, ascii.TableRow{Status: StatusOK, Cells: []string{groupLabelPhysicalUAA, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(health, StatusOK)
+				phys, rows, health = append(phys, *n), append(rows, ascii.TableRow{Status: StatusOK, Cells: []string{groupLabelPhysicalUAA, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(health, StatusOK)
 			}
 		}
 	}
 	rows, health = append(rows, virtRows...), append(health, virtHealth...)
 	if discRes != nil {
-		for _, s := range discRes.Services {
+		for i := range discRes.Services {
+			s := &discRes.Services[i]
 			rows, health = append(rows, ascii.TableRow{Status: StatusINFO, Cells: []string{"[SERVICE - " + strings.ToUpper(s.Protocol) + "]", s.IP, ":" + strconv.Itoa(s.Port), firstNonEmpty(s.Name, s.ServiceType, s.Server)}}), append(health, StatusINFO)
 		}
 	}
 	return phys, virt, rows, health
 }
 
-func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]ascii.TableRow, []float64, []string, []string, string) {
+func selectPathAutopsyHops(data *PathAutopsyData) ([]probe.MTRHop, bool) {
 	var hops []probe.MTRHop
 	useMTR := false
 	if data.MTR != nil {
@@ -408,7 +402,8 @@ func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]a
 	if !useMTR && data.Traceroute != nil {
 		data.ProbeMode, data.Reached, data.SilentTransitHops, data.DestLossPct = firstNonEmpty(data.Traceroute.ProbeMode, data.ProbeMode), data.Traceroute.ReachedDestination, data.Traceroute.SilentTransitHops, data.Traceroute.DestLossPct
 		hops = make([]probe.MTRHop, len(data.Traceroute.Hops))
-		for i, h := range data.Traceroute.Hops {
+		for i := range data.Traceroute.Hops {
+			h := &data.Traceroute.Hops[i]
 			loss := map[bool]float64{true: 100}[h.TimedOut && !h.Silent]
 			if !h.Silent && !h.TimedOut && data.DestLossPct > 0 && (h.Segment == "Destination" || (data.ResolvedIP != "" && h.IP == data.ResolvedIP) || (data.Reached && i == len(data.Traceroute.Hops)-1)) {
 				loss = data.DestLossPct
@@ -419,6 +414,11 @@ func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]a
 	if !data.Reached && data.DestLossPct == 0 && (data.MTR != nil || data.Traceroute != nil) {
 		data.DestLossPct = 100
 	}
+	return hops, useMTR
+}
+
+func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]ascii.TableRow, []float64, []string, []string, string) {
+	hops, useMTR := selectPathAutopsyHops(data)
 	rows, spark, health, overall, silent := make([]ascii.TableRow, 0, len(hops)), make([]float64, 0, len(hops)), make([]string, 0, len(hops)), StatusOK, 0
 	for i := range hops {
 		h, st, flag := &hops[i], StatusOK, "ok"
@@ -443,7 +443,7 @@ func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]a
 	if mtrErr != nil && data.MTR == nil {
 		notes, overall = append(notes, "MTR unavailable: "+mtrErr.Error()), worstStatus(overall, StatusWARN)
 	}
-	if (!data.Reached && (data.MTR != nil || data.Traceroute != nil || (data.Ping != nil && data.Ping.PacketsReceived == 0 && !(mtrErr != nil && trErr != nil)))) || (data.Reached && data.DestLossPct >= 50) {
+	if (!data.Reached && (data.MTR != nil || data.Traceroute != nil || (data.Ping != nil && data.Ping.PacketsReceived == 0 && (mtrErr == nil || trErr == nil)))) || (data.Reached && data.DestLossPct >= 50) {
 		overall = StatusFAIL
 	} else if data.Reached && data.DestLossPct >= 20 {
 		overall = worstStatus(overall, StatusWARN)

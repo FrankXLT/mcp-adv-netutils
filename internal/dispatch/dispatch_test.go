@@ -415,7 +415,6 @@ func TestCronStatusPeriodsAndAdminEdgeCases(t *testing.T) {
 		States: []store.CronStateRecord{{ActiveAlert: true, LastStatus: statusFAIL}, {ConsecutiveNonOK: 1, LastStatus: statusWARN}, {LastStatus: statusOK}},
 	}))
 	assert.Equal(t, []string{statusOK, statusWARN, statusFAIL}, []string{overallAlertStatus(0, 0), overallAlertStatus(0, 1), overallAlertStatus(1, 1)})
-	assert.Equal(t, []string{statusOK, statusWARN, statusFAIL}, []string{worstStatusVal(statusOK, statusOK), worstStatusVal(statusOK, statusWARN), worstStatusVal(statusWARN, statusFAIL)})
 	assert.Empty(t, formatUnixTime(0))
 	assert.Empty(t, formatRemainingLabel(0))
 	assert.Equal(t, "expired", formatRemainingLabel(now.Add(-time.Minute).Unix()))

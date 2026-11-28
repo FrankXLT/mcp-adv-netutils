@@ -112,10 +112,11 @@ func (s *tcpWaveSession) probeHop(ctx context.Context, ttl int, dstPort uint16, 
 		unix.SetsockoptLinger(fd, unix.SOL_SOCKET, unix.SO_LINGER, &unix.Linger{Onoff: 1, Linger: 0}) == nil &&
 		unix.SetsockoptInt(fd, lvl, opt, ttl) == nil && unix.Bind(fd, bindSA) == nil {
 		if sa, gErr := unix.Getsockname(fd); gErr == nil {
-			if sa4, ok := sa.(*unix.SockaddrInet4); ok {
-				srcPort = sa4.Port
-			} else if sa6, ok := sa.(*unix.SockaddrInet6); ok {
-				srcPort = sa6.Port
+			switch sa := sa.(type) {
+			case *unix.SockaddrInet4:
+				srcPort = sa.Port
+			case *unix.SockaddrInet6:
+				srcPort = sa.Port
 			}
 		}
 	}
@@ -146,6 +147,10 @@ func (s *tcpWaveSession) probeHop(ctx context.Context, ttl int, dstPort uint16, 
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
+	if fd < 0 || fd > math.MaxInt32 {
+		return tcpHopOutcome{}
+	}
+	// #nosec G115 -- fd is explicitly bounds-checked to [0, math.MaxInt32] above.
 	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
 pollLoop:
 	for ctx.Err() == nil {
@@ -244,18 +249,20 @@ func executeDirectTCPFallback(ctx context.Context, targetIP net.IP, cycles int, 
 		dialer := net.Dialer{Timeout: perAttempt}
 		refusedRTT, refusedPort := 0.0, ""
 		for i := 0; i < len(ports) && ctx.Err() == nil; i++ {
-			if port := ports[i]; preferred == "" || port == preferred {
-				start := time.Now()
-				conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetStr, port))
-				rtt := float64(time.Since(start)) / float64(time.Millisecond)
-				if err == nil {
-					_ = conn.Close()
-					refusedPort, refusedRTT = port, rtt
-					break
-				}
-				if (isConnRefusedErr(err) || errors.Is(err, unix.ECONNREFUSED)) && refusedPort == "" {
-					refusedPort, refusedRTT = port, rtt
-				}
+			port := ports[i]
+			if preferred != "" && port != preferred {
+				continue
+			}
+			start := time.Now()
+			conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetStr, port))
+			rtt := float64(time.Since(start)) / float64(time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				refusedPort, refusedRTT = port, rtt
+				break
+			}
+			if (isConnRefusedErr(err) || errors.Is(err, unix.ECONNREFUSED)) && refusedPort == "" {
+				refusedPort, refusedRTT = port, rtt
 			}
 		}
 		if refusedPort != "" {

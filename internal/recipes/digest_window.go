@@ -27,7 +27,7 @@ type parsedDigestFilter struct {
 	limit                            int
 }
 
-func parseDigestWindowAndBounds(params RenderDigestParams, now time.Time) (parsedDigestFilter, error) {
+func parseDigestWindowAndBounds(params *RenderDigestParams, now time.Time) (parsedDigestFilter, error) {
 	limit := min(max(params.Limit, 0), maxDigestLimit)
 	if params.Limit <= 0 {
 		limit = defaultDigestLimit
@@ -94,7 +94,7 @@ func parseDigestTimestamp(raw, field string) (int64, error) {
 	return 0, fmt.Errorf("invalid digest %s timestamp %q: expected RFC3339 or non-negative Unix seconds", field, raw)
 }
 
-func loadDigestJobsAndSummary(ctx context.Context, st *store.JobStore, parsed parsedDigestFilter) ([]store.JobRecord, *store.JobWindowSummary, error) {
+func loadDigestJobsAndSummary(ctx context.Context, st *store.JobStore, parsed *parsedDigestFilter) ([]store.JobRecord, *store.JobWindowSummary, error) {
 	if len(parsed.jobIDs) > 0 {
 		jobs := make([]store.JobRecord, 0, len(parsed.jobIDs))
 		for _, id := range parsed.jobIDs {
@@ -183,7 +183,7 @@ func finalizeDigestBreakdowns(toolMap map[string]*store.ToolDigestCount, toolDur
 	return tools[:min(len(tools), 15)], targets[:min(len(targets), 10)]
 }
 
-func buildDigestData(jobs []store.JobRecord, winSummary *store.JobWindowSummary, parsed parsedDigestFilter) DigestData {
+func buildDigestData(jobs []store.JobRecord, winSummary *store.JobWindowSummary, parsed *parsedDigestFilter) DigestData {
 	entries := make([]DigestJobEntry, 0, len(jobs))
 	for i := range jobs {
 		j := &jobs[i]
@@ -228,7 +228,7 @@ func capDigestData(data *DigestData) {
 	data.Jobs, data.TotalJobs, data.Truncated, data.OmittedJobs = kept, bestKeep, true, len(orig)-bestKeep
 }
 
-func buildDigestCardDecorations(data DigestData) ([]ascii.MetricKV, []string, string, string) {
+func buildDigestCardDecorations(data *DigestData) ([]ascii.MetricKV, []string, string, string) {
 	totalMatching, passRate, avgDur, maxDur, overall := data.TotalJobs, 0.0, 0.0, int64(0), StatusOK
 	if ws := data.WindowSummary; ws != nil {
 		totalMatching, passRate, avgDur, maxDur = ws.TotalMatching, ws.PassRatePct, ws.AvgDurationMS, ws.MaxDurationMS
@@ -246,7 +246,8 @@ func buildDigestCardDecorations(data DigestData) ([]ascii.MetricKV, []string, st
 		summary = fmt.Sprintf("Consolidated %d job(s): %d OK, %d WARN, %d FAIL (%d incident(s))", totalMatching, data.OKCount, data.WarnCount, data.FailCount, data.IncidentCount)
 	}
 	metrics := []ascii.MetricKV{
-		{Label: "Matched", Value: matchedVal}, {Label: "Pass Rate", Value: fmt.Sprintf("%.1f%%", passRate)},
+		{Label: "Matched", Value: matchedVal},
+		{Label: "Pass Rate", Value: fmt.Sprintf("%.1f%%", passRate)},
 		{Label: "OK / WARN / FAIL", Value: fmt.Sprintf("%d / %d / %d", data.OKCount, data.WarnCount, data.FailCount)},
 		{Label: "Avg / Max Dur", Value: fmt.Sprintf("%.0fms / %dms", avgDur, maxDur)},
 	}
