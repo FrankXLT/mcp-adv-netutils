@@ -2,11 +2,9 @@ package probe
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -30,6 +28,8 @@ type MTRHop struct {
 	Hop      int     `json:"hop"`
 	IP       string  `json:"ip"`
 	Hostname string  `json:"hostname,omitempty"`
+	Segment  string  `json:"segment,omitempty"`
+	Silent   bool    `json:"silent,omitempty"`
 	Sent     int     `json:"sent"`
 	Received int     `json:"received"`
 	LossPct  float64 `json:"loss_pct"`
@@ -42,14 +42,16 @@ type MTRHop struct {
 
 // MTRResult summarizes hop-by-hop quality metrics across multiple probe cycles.
 type MTRResult struct {
-	Target     string   `json:"target"`
-	ResolvedIP string   `json:"resolved_ip"`
-	ProbeMode  string   `json:"probe_mode"`
-	Cycles     int      `json:"cycles"`
-	MaxHops    int      `json:"max_hops"`
-	Reached    bool     `json:"reached"`
-	Hops       []MTRHop `json:"hops"`
-	Timestamp  string   `json:"timestamp"`
+	Target            string   `json:"target"`
+	ResolvedIP        string   `json:"resolved_ip"`
+	ProbeMode         string   `json:"probe_mode"`
+	Cycles            int      `json:"cycles"`
+	MaxHops           int      `json:"max_hops"`
+	Reached           bool     `json:"reached"`
+	SilentTransitHops int      `json:"silent_transit_hops,omitempty"`
+	DestLossPct       float64  `json:"dest_loss_pct"`
+	Hops              []MTRHop `json:"hops"`
+	Timestamp         string   `json:"timestamp"`
 }
 
 type hopAccumulator struct {
@@ -75,7 +77,7 @@ const (
 )
 
 // ExecuteMTRQuality probes hops 1..MaxHops across Cycles rounds to measure per-hop packet
-// loss and latency jitter, falling back gracefully to TCP connect probing if unprivileged.
+// loss and latency jitter, escalating automatically to concurrent TCP probing when ICMP fails.
 func ExecuteMTRQuality(ctx context.Context, params MTRParams, guard *security.TargetGuard) (*MTRResult, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: context must not be nil", security.ErrTargetInvalid)
@@ -88,24 +90,45 @@ func ExecuteMTRQuality(ctx context.Context, params MTRParams, guard *security.Ta
 
 	maxHops, cycles, timeout := normalizeMTRParams(params)
 	result, ok := executeICMPMTR(ctx, resolvedIP, maxHops, cycles, timeout)
-	if !ok {
-		result = executeTCPTracerouteFallback(ctx, resolvedIP, cycles, timeout)
+	if !ok || !result.Reached {
+		tcpRes := executeTCPWaveMTR(ctx, resolvedIP, maxHops, cycles, timeout)
+		result = selectWinningMTRResult(result, ok, tcpRes)
 	}
 
+	finalizeMTRMetadata(result, resolvedIP)
 	resolveMTRHopHostnames(ctx, result.Hops)
 
 	result.Target = strings.TrimSpace(params.Target)
 	result.ResolvedIP = resolvedIP.String()
-	result.Cycles = cycles
+	if result.Cycles == 0 {
+		result.Cycles = cycles
+	}
 	result.MaxHops = maxHops
 	result.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	return result, nil
 }
 
+// ExecuteTCPTraceroute executes pure-Go IP_TTL TCP wave probing (443/80 with fallback)
+// and populates hop segmentation, CoPP silence metadata, and destination loss.
+func ExecuteTCPTraceroute(ctx context.Context, targetIP net.IP, maxHops, cycles int, timeout time.Duration) *MTRResult {
+	if ctx == nil || targetIP == nil || targetIP.To16() == nil {
+		return &MTRResult{ProbeMode: "tcp_traceroute_fallback", DestLossPct: 100}
+	}
+	res := executeTCPWaveMTR(ctx, targetIP, maxHops, cycles, timeout)
+	finalizeMTRMetadata(res, targetIP)
+	res.ResolvedIP = targetIP.String()
+	res.MaxHops = clampMTRParam(maxHops, 15, 1, 30)
+	if res.Cycles == 0 {
+		res.Cycles = clampMTRParam(cycles, 4, 1, 10)
+	}
+	res.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	return res
+}
+
 func normalizeMTRParams(params MTRParams) (int, int, time.Duration) {
 	maxHops := clampMTRParam(params.MaxHops, 15, 1, 30)
-	cycles := clampMTRParam(params.Cycles, 5, 1, 10)
-	timeoutMS := clampMTRParam(params.TimeoutMS, 1500, 100, 5000)
+	cycles := clampMTRParam(params.Cycles, 4, 1, 10)
+	timeoutMS := clampMTRParam(params.TimeoutMS, 900, 100, 5000)
 	return maxHops, cycles, time.Duration(timeoutMS) * time.Millisecond
 }
 
@@ -162,242 +185,128 @@ func (t *icmpTransport) setHopLimit(ttl int) error {
 	return nil
 }
 
-func executeICMPMTR(ctx context.Context, targetIP net.IP, maxHops, cycles int, timeout time.Duration) (*MTRResult, bool) {
-	tr, ok := openICMPTransport(targetIP)
-	if !ok {
-		return nil, false
-	}
-	defer func() { _ = tr.conn.Close() }()
-
-	if err := tr.setHopLimit(1); err != nil {
-		return nil, false
-	}
-
-	accs := make([]*hopAccumulator, maxHops)
-	for i := range accs {
-		accs[i] = &hopAccumulator{rttsMs: make([]float64, 0, cycles)}
-	}
-
-	pid := os.Getpid()
-	if pid < 0 {
-		pid = 1
-	}
-	probeID := pid & 0xffff
-	activeMaxHops := maxHops
-	reached := false
-	buf := make([]byte, 1500)
-
-	for cycle := range cycles {
-		for hop := 1; hop <= activeMaxHops && ctx.Err() == nil; hop++ {
-			seq := cycle*maxHops + hop
-			acc := accs[hop-1]
-			acc.sent++
-
-			responderIP, rttMs, reachedDest, gotReply := probeICMPHop(ctx, tr, targetIP, hop, probeID, seq, timeout, buf)
-			if !gotReply {
-				continue
-			}
-			if acc.ip == "" {
-				acc.ip = responderIP
-			}
-			acc.rttsMs = append(acc.rttsMs, rttMs)
-			if reachedDest {
-				reached = true
-				if hop < activeMaxHops {
-					activeMaxHops = hop
-				}
-				break
-			}
+func selectWinningMTRResult(icmpRes *MTRResult, hasICMP bool, tcpRes *MTRResult) *MTRResult {
+	if !hasICMP || icmpRes == nil {
+		if tcpRes != nil {
+			return tcpRes
 		}
-		if ctx.Err() != nil {
-			break
-		}
+		return &MTRResult{ProbeMode: "tcp_traceroute_fallback"}
 	}
-
-	hops := make([]MTRHop, 0, activeMaxHops)
-	for i := range activeMaxHops {
-		hops = append(hops, computeMTRHopStats(i+1, accs[i].sent, accs[i].ip, accs[i].rttsMs))
+	if tcpRes != nil && tcpRes.Reached {
+		return tcpRes
 	}
-	return &MTRResult{ProbeMode: "icmp", Reached: reached, Hops: hops}, true
+	icmpCount := countRespondingHops(icmpRes.Hops)
+	var tcpCount int
+	if tcpRes != nil {
+		tcpCount = countRespondingHops(tcpRes.Hops)
+	}
+	if icmpCount > 0 && icmpCount > tcpCount {
+		return icmpRes
+	}
+	if tcpRes != nil {
+		return tcpRes
+	}
+	return icmpRes
 }
 
-func probeICMPHop(
-	ctx context.Context,
-	tr *icmpTransport,
-	targetIP net.IP,
-	hop, probeID, seq int,
-	timeout time.Duration,
-	buf []byte,
-) (string, float64, bool, bool) {
-	if err := tr.setHopLimit(hop); err != nil {
-		return "", 0, false, false
-	}
-
-	msg := icmp.Message{
-		Type: tr.echoType,
-		Body: &icmp.Echo{ID: probeID, Seq: seq, Data: []byte("mcp-adv-netutils-mtr")},
-	}
-	msgBytes, err := msg.Marshal(nil)
-	if err != nil {
-		return "", 0, false, false
-	}
-
-	start := time.Now()
-	if _, err := tr.conn.WriteTo(msgBytes, &net.IPAddr{IP: targetIP}); err != nil {
-		return "", 0, false, false
-	}
-
-	deadline := start.Add(timeout)
-	if ctxDeadline, hasDeadline := ctx.Deadline(); hasDeadline && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-	_ = tr.conn.SetReadDeadline(deadline)
-
-	for ctx.Err() == nil {
-		n, peer, readErr := tr.conn.ReadFrom(buf)
-		if readErr != nil {
-			return "", 0, false, false
+func countRespondingHops(hops []MTRHop) int {
+	count := 0
+	for i := range hops {
+		if hops[i].Received > 0 {
+			count++
 		}
-		rttMs := float64(time.Since(start)) / float64(time.Millisecond)
+	}
+	return count
+}
 
-		rm, parseErr := icmp.ParseMessage(tr.protoNum, buf[:n])
-		if parseErr != nil {
+func trimTrailingSilentHops(hops []MTRHop, reached bool, targetStr string) []MTRHop {
+	if !reached || len(hops) == 0 {
+		return hops
+	}
+	lastRespIdx := -1
+	destIdx := -1
+	for i := range hops {
+		if hops[i].Received <= 0 {
 			continue
 		}
-
-		peerIP := peerIPString(peer)
-		if matched, reachedDest := matchICMPMTRReply(rm, tr.isIPv4, probeID, seq, peerIP, targetIP.String()); matched {
-			return peerIP, rttMs, reachedDest, true
+		lastRespIdx = i
+		if targetStr != "" && hops[i].IP == targetStr && destIdx == -1 {
+			destIdx = i
 		}
 	}
-	return "", 0, false, false
+	trimIdx := lastRespIdx
+	if destIdx >= 0 {
+		trimIdx = destIdx
+	}
+	if trimIdx >= 0 && trimIdx+1 < len(hops) {
+		return hops[:trimIdx+1]
+	}
+	return hops
 }
 
-func matchICMPMTRReply(rm *icmp.Message, isIPv4 bool, probeID, seq int, peerIP, targetIP string) (bool, bool) {
-	var echoReplyType icmp.Type = ipv4.ICMPTypeEchoReply
-	var timeExceededType icmp.Type = ipv4.ICMPTypeTimeExceeded
-	var dstUnreachType icmp.Type = ipv4.ICMPTypeDestinationUnreachable
-	if !isIPv4 {
-		echoReplyType = ipv6.ICMPTypeEchoReply
-		timeExceededType = ipv6.ICMPTypeTimeExceeded
-		dstUnreachType = ipv6.ICMPTypeDestinationUnreachable
+func finalizeMTRMetadata(res *MTRResult, resolvedIP net.IP) {
+	if res == nil {
+		return
+	}
+	var targetStr string
+	if resolvedIP != nil {
+		targetStr = resolvedIP.String()
+	} else {
+		targetStr = res.ResolvedIP
 	}
 
-	switch rm.Type {
-	case echoReplyType:
-		echo, ok := rm.Body.(*icmp.Echo)
-		return ok && echo.ID == probeID && echo.Seq == seq, true
-	case timeExceededType:
-		te, ok := rm.Body.(*icmp.TimeExceeded)
-		if !ok {
-			return false, false
+	res.Hops = trimTrailingSilentHops(res.Hops, res.Reached, targetStr)
+
+	lastRespIdx := -1
+	for i := range res.Hops {
+		if res.Hops[i].Received > 0 {
+			lastRespIdx = i
 		}
-		id, embeddedSeq, valid := extractEmbeddedEchoIDSeq(te.Data, isIPv4)
-		return valid && id == probeID && embeddedSeq == seq, false
-	case dstUnreachType:
-		du, ok := rm.Body.(*icmp.DstUnreach)
-		if !ok {
-			return false, false
-		}
-		id, embeddedSeq, valid := extractEmbeddedEchoIDSeq(du.Data, isIPv4)
-		return valid && id == probeID && embeddedSeq == seq, peerIP == targetIP
-	default:
-		return false, false
 	}
+
+	silentCount := 0
+	totalHops := len(res.Hops)
+	for i := range res.Hops {
+		h := &res.Hops[i]
+		isSilent := h.Received == 0 && (i < lastRespIdx || (res.Reached && i < totalHops-1))
+		h.Silent = isSilent
+		if isSilent {
+			silentCount++
+		}
+		h.Segment = assignHopSegment(i, h, targetStr, totalHops, res.Reached)
+	}
+	res.SilentTransitHops = silentCount
+
+	if !res.Reached {
+		res.DestLossPct = 100.0
+		return
+	}
+	if totalHops > 0 {
+		res.DestLossPct = res.Hops[totalHops-1].LossPct
+		return
+	}
+	res.DestLossPct = 0.0
 }
 
-func extractEmbeddedEchoIDSeq(data []byte, isIPv4 bool) (int, int, bool) {
-	if isIPv4 {
-		if len(data) < ipv4HeaderLen {
-			return 0, 0, false
-		}
-		ihl := int(data[0]&0x0f) * 4
-		if ihl < ipv4HeaderLen || len(data) < ihl+l4HeaderLen || data[9] != mtrICMPProtoV4 {
-			return 0, 0, false
-		}
-		return int(binary.BigEndian.Uint16(data[ihl+4 : ihl+6])), int(binary.BigEndian.Uint16(data[ihl+6 : ihl+8])), true
+func assignHopSegment(hopIdx int, h *MTRHop, targetStr string, totalHops int, reached bool) string {
+	if (targetStr != "" && h.IP == targetStr) || (reached && hopIdx == totalHops-1) {
+		return "Destination"
 	}
-
-	if len(data) < ipv6HeaderLen+l4HeaderLen || data[6] != mtrICMPProtoV6 {
-		return 0, 0, false
+	if hopIdx == 0 && isGatewayHopIP(h.IP) {
+		return "Gateway"
 	}
-	return int(binary.BigEndian.Uint16(data[ipv6HeaderLen+4 : ipv6HeaderLen+6])),
-		int(binary.BigEndian.Uint16(data[ipv6HeaderLen+6 : ipv6HeaderLen+8])), true
+	return "Transit"
 }
 
-func executeTCPTracerouteFallback(ctx context.Context, targetIP net.IP, cycles int, timeout time.Duration) *MTRResult {
-	ports := []string{"443", "80", "22", "53"}
-	rttsMs := make([]float64, 0, cycles)
-	sent := 0
-	preferredPort := ""
-	reached := false
-
-	for range cycles {
-		if ctx.Err() != nil {
-			break
-		}
-		sent++
-
-		rttMs, usedPort, ok := probeTCPFallbackCycle(ctx, targetIP, ports, preferredPort, timeout)
-		if ok {
-			reached = true
-			if preferredPort == "" {
-				preferredPort = usedPort
-			}
-			rttsMs = append(rttsMs, rttMs)
-		}
+func isGatewayHopIP(ipStr string) bool {
+	if ipStr == "" || ipStr == "*" {
+		return false
 	}
-
-	hop := computeMTRHopStats(1, sent, targetIP.String(), rttsMs)
-	if !reached {
-		hop.IP = "*"
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
 	}
-
-	return &MTRResult{
-		ProbeMode: "tcp_traceroute_fallback",
-		Reached:   reached,
-		Hops:      []MTRHop{hop},
-	}
-}
-
-func probeTCPFallbackCycle(ctx context.Context, targetIP net.IP, ports []string, preferredPort string, timeout time.Duration) (float64, string, bool) {
-	candidates := ports
-	if preferredPort != "" {
-		candidates = []string{preferredPort}
-	}
-
-	perAttempt := timeout / time.Duration(len(candidates))
-	if perAttempt < 25*time.Millisecond {
-		perAttempt = 25 * time.Millisecond
-	}
-
-	var refusedRTT float64
-	var refusedPort string
-
-	for _, port := range candidates {
-		if ctx.Err() != nil {
-			break
-		}
-		dialCtx, cancel := context.WithTimeout(ctx, perAttempt)
-		start := time.Now()
-		conn, err := (&net.Dialer{Timeout: perAttempt}).DialContext(dialCtx, "tcp", net.JoinHostPort(targetIP.String(), port))
-		cancel()
-		rttMs := float64(time.Since(start)) / float64(time.Millisecond)
-
-		if err == nil {
-			_ = conn.Close()
-			return rttMs, port, true
-		}
-		if isConnRefusedErr(err) && refusedPort == "" {
-			refusedPort = port
-			refusedRTT = rttMs
-		}
-	}
-
-	if refusedPort != "" {
-		return refusedRTT, refusedPort, true
-	}
-	return 0, "", false
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLoopback()
 }
 
 func computeMTRHopStats(hopNum, sent int, ip string, rttsMs []float64) MTRHop {

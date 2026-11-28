@@ -66,16 +66,20 @@ type PathAutopsyParams struct {
 
 // PathAutopsyData aggregates DNS, ping, MTU, MTR, and traceroute diagnostics plus flagged anomalies.
 type PathAutopsyData struct {
-	Target        string                         `json:"target"`
-	ResolvedIP    string                         `json:"resolved_ip"`
-	DNS           *resolver.ResolverResponse     `json:"dns,omitempty"`
-	Ping          *ping.PingResponse             `json:"ping,omitempty"`
-	MTU           *probe.MTUProbeResult          `json:"mtu,omitempty"`
-	MTR           *probe.MTRResult               `json:"mtr,omitempty"`
-	Traceroute    *traceroute.TracerouteResponse `json:"traceroute,omitempty"`
-	LossHops      []int                          `json:"loss_hops,omitempty"`
-	HighJitterHop []int                          `json:"high_jitter_hops,omitempty"`
-	Blackhole     bool                           `json:"pmtud_blackhole"`
+	Target            string                         `json:"target"`
+	ResolvedIP        string                         `json:"resolved_ip"`
+	ProbeMode         string                         `json:"probe_mode,omitempty"`
+	Reached           bool                           `json:"reached"`
+	SilentTransitHops int                            `json:"silent_transit_hops,omitempty"`
+	DestLossPct       float64                        `json:"dest_loss_pct"`
+	DNS               *resolver.ResolverResponse     `json:"dns,omitempty"`
+	Ping              *ping.PingResponse             `json:"ping,omitempty"`
+	MTU               *probe.MTUProbeResult          `json:"mtu,omitempty"`
+	MTR               *probe.MTRResult               `json:"mtr,omitempty"`
+	Traceroute        *traceroute.TracerouteResponse `json:"traceroute,omitempty"`
+	LossHops          []int                          `json:"loss_hops,omitempty"`
+	HighJitterHop     []int                          `json:"high_jitter_hops,omitempty"`
+	Blackhole         bool                           `json:"pmtud_blackhole"`
 }
 
 // WakeVerifyParams configures Wake-on-LAN transmission followed by readiness polling.
@@ -135,21 +139,18 @@ func ExecuteHostCard(ctx context.Context, deps Dependencies, params HostCardPara
 		data.Ports, _ = port_scan.Execute(gctx, port_scan.PortScanParams{Target: cleanTarget, Ports: preset}, deps.Guard)
 	})
 	_ = g.Wait()
-	if arpRes != nil {
-		for i := range arpRes.Neighbors {
-			if arpRes.Neighbors[i].IP == data.ResolvedIP {
-				data.ARP = &arpRes.Neighbors[i]
-				break
-			}
+	for i := 0; arpRes != nil && i < len(arpRes.Neighbors); i++ {
+		if arpRes.Neighbors[i].IP == data.ResolvedIP {
+			data.ARP = &arpRes.Neighbors[i]
+			break
 		}
 	}
 	runHostCardUpperLayers(ctx, deps, &params, cleanTarget, &data)
 	rows, health, spark, status, summary := buildHostCardSummary(&data)
 	return makeRecipeResult(&cardSpec{
-		ToolName: "host_card", Title: "HOST CARD (L2-L7)", Subtitle: "Full-Stack Inspection", Target: cleanTarget,
-		Status: status, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
-		Metrics: []ascii.MetricKV{{Label: "IP", Value: data.ResolvedIP}, {Label: "Status", Value: status}},
-		Headers: []string{"Layer", "Check", "Result", "Detail"}, Rows: rows, SparkValues: spark, HealthStates: health, RawData: data,
+		ToolName: "host_card", Title: "HOST CARD (L2-L7)", Subtitle: "Full-Stack Inspection", Target: cleanTarget, Status: status, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
+		Metrics: []ascii.MetricKV{{Label: "IP", Value: data.ResolvedIP}, {Label: "Status", Value: status}}, Headers: []string{"Layer", "Check", "Result", "Detail"},
+		Rows: rows, SparkValues: spark, HealthStates: health, RawData: data,
 	}), nil
 }
 
@@ -177,20 +178,20 @@ func ExecuteLANRadar(ctx context.Context, deps Dependencies, params LANRadarPara
 	}
 	phys, virt, rows, health := buildLANRadarRows(arpRes, discRes)
 	var notes []string
-	discWarn, status := "", StatusOK
+	discWarn, status, services := "", StatusOK, []probe.DiscoveredService(nil)
 	if discErr != nil {
 		discWarn, status, notes = discErr.Error(), StatusWARN, append(notes, "Service discovery warning: "+discErr.Error())
 	}
-	if discRes == nil {
-		discRes = &probe.DiscoverResult{}
+	if discRes != nil {
+		services = discRes.Services
 	}
-	summary := fmt.Sprintf("LAN Radar: %d physical UAA, %d docker/VM LAA, %d service(s)", len(phys), len(virt), len(discRes.Services))
+	summary := fmt.Sprintf("LAN Radar: %d physical UAA, %d docker/VM LAA, %d service(s)", len(phys), len(virt), len(services))
 	return makeRecipeResult(&cardSpec{
 		ToolName: "lan_radar", Title: "LAN RADAR", Subtitle: "UAA Physical vs LAA Virtual", Target: firstNonEmpty(arpRes.CIDR, "local-arp"),
 		Status: status, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
-		Metrics: []ascii.MetricKV{{Label: "Physical UAA", Value: strconv.Itoa(len(phys))}, {Label: "Docker/VM LAA", Value: strconv.Itoa(len(virt))}, {Label: "Services", Value: strconv.Itoa(len(discRes.Services))}},
+		Metrics: []ascii.MetricKV{{Label: "Physical UAA", Value: strconv.Itoa(len(phys))}, {Label: "Docker/VM LAA", Value: strconv.Itoa(len(virt))}, {Label: "Services", Value: strconv.Itoa(len(services))}},
 		Headers: []string{"Group", "IP", "MAC", "Vendor / Service"}, Rows: rows, HealthStates: health, Notes: notes,
-		RawData: LANRadarData{CIDR: arpRes.CIDR, PhysicalUAA: phys, VirtualLAA: virt, Services: discRes.Services, DiscoveryWarning: discWarn},
+		RawData: LANRadarData{CIDR: arpRes.CIDR, PhysicalUAA: phys, VirtualLAA: virt, Services: services, DiscoveryWarning: discWarn},
 	}), nil
 }
 
@@ -229,11 +230,13 @@ func ExecutePathAutopsy(ctx context.Context, deps Dependencies, params PathAutop
 	if data.MTU != nil {
 		summary += fmt.Sprintf(", MTU=%d (WG=%d)", data.MTU.DiscoveredMTU, data.MTU.WireGuardSafeMTU)
 	}
+	metrics := []ascii.MetricKV{
+		{Label: "IP", Value: data.ResolvedIP}, {Label: "Probe Mode", Value: firstNonEmpty(data.ProbeMode, "unknown")}, {Label: "Dest Loss", Value: fmt.Sprintf("%.0f%%", data.DestLossPct)},
+		{Label: "Silent Transit", Value: strconv.Itoa(data.SilentTransitHops)}, {Label: "Loss Hops", Value: strconv.Itoa(len(data.LossHops))}, {Label: "Blackhole", Value: strconv.FormatBool(data.Blackhole)},
+	}
 	return makeRecipeResult(&cardSpec{
-		ToolName: "path_autopsy", Title: "PATH AUTOPSY", Subtitle: "MTR + PMTUD + Trace", Target: cleanTarget,
-		Status: status, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
-		Metrics: []ascii.MetricKV{{Label: "IP", Value: data.ResolvedIP}, {Label: "Loss Hops", Value: strconv.Itoa(len(data.LossHops))}, {Label: "Blackhole", Value: strconv.FormatBool(data.Blackhole)}},
-		Headers: []string{"Hop", "IP", "Loss%", "AvgMs", "StDev", "Flag"}, Rows: rows, SparkValues: spark, HealthStates: health, Notes: notes, RawData: data,
+		ToolName: "path_autopsy", Title: "PATH AUTOPSY", Subtitle: "MTR + PMTUD + Trace", Target: cleanTarget, Status: status, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
+		Metrics: metrics, Headers: []string{"Hop", "IP", "Loss%", "AvgMs", "StDev", "Flag"}, Rows: rows, SparkValues: spark, HealthStates: health, Notes: notes, RawData: data,
 	}), nil
 }
 
@@ -249,15 +252,14 @@ func ExecuteWakeVerify(ctx context.Context, deps Dependencies, params WakeVerify
 		return nil, err
 	}
 	params.Target = cleanTarget
-	waitSec := min(max(params.WaitSeconds, 1), maxWakeWaitSec)
-	if params.WaitSeconds == 0 {
-		waitSec = defaultWakeWaitSec
+	waitSec := defaultWakeWaitSec
+	if params.WaitSeconds > 0 {
+		waitSec = min(params.WaitSeconds, maxWakeWaitSec)
 	}
 	wolRes, err := wol.Execute(ctx, wol.WOLParams{MAC: params.MAC, BroadcastIP: params.BroadcastIP, Port: intPtr(params.Port)}, deps.Guard)
 	if err != nil {
 		return nil, fmt.Errorf("WoL dispatch failed: %w", err)
 	}
-
 	started := time.Now()
 	ready, readyVia, attempts, lastPing, lastScan := pollWakeReadiness(ctx, deps, &params, time.Duration(waitSec)*time.Second)
 	elapsedMS := time.Since(started).Milliseconds()
@@ -266,8 +268,7 @@ func ExecuteWakeVerify(ctx context.Context, deps Dependencies, params WakeVerify
 		status, summary = StatusOK, fmt.Sprintf("Host %s ready via %s in %dms (%d attempt(s))", params.Target, readyVia, elapsedMS, attempts)
 	}
 	return makeRecipeResult(&cardSpec{
-		ToolName: "wake_verify", Title: "WAKE & VERIFY", Subtitle: "WoL + Readiness Poll", Target: params.Target,
-		Status: status, Summary: summary, DurationMS: elapsedMS,
+		ToolName: "wake_verify", Title: "WAKE & VERIFY", Subtitle: "WoL + Readiness Poll", Target: params.Target, Status: status, Summary: summary, DurationMS: elapsedMS,
 		Metrics: []ascii.MetricKV{{Label: "MAC", Value: wolRes.Normalized}, {Label: "Wake-to-Ready", Value: strconv.FormatInt(elapsedMS, 10) + "ms"}},
 		Headers: []string{"Phase", "Target", "Channel", "Outcome"}, HealthStates: []string{StatusOK, status},
 		Rows: []ascii.TableRow{
@@ -293,9 +294,7 @@ func runHostCardUpperLayers(ctx context.Context, deps Dependencies, params *Host
 	open80, open443 := false, false
 	if data.Ports != nil {
 		for _, pr := range data.Ports.Ports {
-			if pr.State == "open" {
-				open80, open443 = open80 || pr.Port == 80, open443 || pr.Port == 443
-			}
+			open80, open443 = open80 || (pr.State == "open" && pr.Port == 80), open443 || (pr.State == "open" && pr.Port == 443)
 		}
 	}
 	var g errgroup.Group
@@ -303,12 +302,9 @@ func runHostCardUpperLayers(ctx context.Context, deps Dependencies, params *Host
 		goRun(&g, func() { data.TLS, _ = tls.Execute(ctx, tls.TLSCheckParams{Domain: target, Port: 443}, deps.tlsCfg()) })
 	}
 	if open80 || open443 {
-		scheme := "http://"
-		if open443 {
-			scheme = "https://"
-		}
+		url := map[bool]string{false: "http://", true: "https://"}[open443] + target
 		goRun(&g, func() {
-			data.HTTP, _ = http_ping.Execute(ctx, http_ping.HTTPPingParams{URL: scheme + target, Count: intPtr(1)}, deps.httpCfg())
+			data.HTTP, _ = http_ping.Execute(ctx, http_ping.HTTPPingParams{URL: url, Count: intPtr(1)}, deps.httpCfg())
 		})
 	}
 	if params.CheckSNMP || params.SNMPParams != nil {
@@ -324,25 +320,23 @@ func runHostCardUpperLayers(ctx context.Context, deps Dependencies, params *Host
 
 func buildHostCardSummary(data *HostCardData) ([]ascii.TableRow, []string, []float64, string, string) {
 	rows, health, spark := make([]ascii.TableRow, 0, 6), make([]string, 0, 6), make([]float64, 0, 2)
-	addRow := func(st string, cells ...string) {
+	add := func(st string, cells ...string) {
 		rows, health = append(rows, ascii.TableRow{Status: st, Cells: cells}), append(health, st)
 	}
 	if data.ARP != nil {
-		addRow(StatusOK, "L2 ARP", data.ARP.MAC, data.ARP.AddressType, data.ARP.Vendor)
+		add(StatusOK, "L2 ARP", data.ARP.MAC, data.ARP.AddressType, data.ARP.Vendor)
 	} else {
-		addRow(StatusINFO, "L2 ARP", "-", "not in cache", "-")
+		add(StatusINFO, "L2 ARP", "-", "not in cache", "-")
 	}
 	pingSt := StatusFAIL
 	if data.Ping != nil {
-		if data.Ping.PacketsReceived > 0 && data.Ping.PacketLoss == 0 {
-			pingSt = StatusOK
-		} else if data.Ping.PacketsReceived > 0 {
-			pingSt = StatusWARN
+		if data.Ping.PacketsReceived > 0 {
+			pingSt = map[bool]string{false: StatusWARN, true: StatusOK}[data.Ping.PacketLoss == 0]
 		}
 		spark = append(spark, data.Ping.AvgRTT)
-		addRow(pingSt, "L3 Ping", data.ResolvedIP, data.Ping.ProbeMode, fmt.Sprintf("loss=%.0f%% rtt=%.2fms", data.Ping.PacketLoss, data.Ping.AvgRTT))
+		add(pingSt, "L3 Ping", data.ResolvedIP, data.Ping.ProbeMode, fmt.Sprintf("loss=%.0f%% rtt=%.2fms", data.Ping.PacketLoss, data.Ping.AvgRTT))
 	} else {
-		addRow(StatusFAIL, "L3 Ping", data.ResolvedIP, "error", "unavailable")
+		add(StatusFAIL, "L3 Ping", data.ResolvedIP, "error", "unavailable")
 	}
 	var openPorts []string
 	if data.Ports != nil {
@@ -352,34 +346,26 @@ func buildHostCardSummary(data *HostCardData) ([]ascii.TableRow, []string, []flo
 			}
 		}
 	}
-	portSt := StatusINFO
-	if len(openPorts) > 0 {
-		portSt = StatusOK
-	}
-	addRow(portSt, "L4 TCP", strconv.Itoa(len(openPorts))+" open", strings.Join(openPorts, ","), "-")
+	add(map[bool]string{false: StatusINFO, true: StatusOK}[len(openPorts) > 0], "L4 TCP", strconv.Itoa(len(openPorts))+" open", strings.Join(openPorts, ","), "-")
 	tlsSt := StatusOK
 	if data.TLS != nil {
-		exp := 0
+		exp, expired := 0, false
 		if len(data.TLS.PeerCertificates) > 0 {
-			exp = data.TLS.PeerCertificates[0].ExpiresInDays
+			exp, expired = data.TLS.PeerCertificates[0].ExpiresInDays, data.TLS.PeerCertificates[0].IsExpired
 		}
-		if len(data.TLS.PeerCertificates) > 0 && data.TLS.PeerCertificates[0].IsExpired {
+		if expired {
 			tlsSt = StatusFAIL
 		} else if !data.TLS.ChainValid {
 			tlsSt = StatusWARN
 		}
-		addRow(tlsSt, "L6 TLS", data.TLS.TLSVersion, data.TLS.CipherSuite, fmt.Sprintf("valid=%v exp=%dd", data.TLS.ChainValid, exp))
+		add(tlsSt, "L6 TLS", data.TLS.TLSVersion, data.TLS.CipherSuite, fmt.Sprintf("valid=%v exp=%dd", data.TLS.ChainValid, exp))
 	}
 	if data.HTTP != nil {
-		httpSt := StatusOK
-		if data.HTTP.SuccessCount == 0 {
-			httpSt = StatusFAIL
-		}
 		spark = append(spark, data.HTTP.AvgTotalTime)
-		addRow(httpSt, "L7 HTTP", data.HTTP.Target, fmt.Sprintf("%d/%d ok", data.HTTP.SuccessCount, data.HTTP.RequestsSent), fmt.Sprintf("total=%.1fms", data.HTTP.AvgTotalTime))
+		add(map[bool]string{false: StatusFAIL, true: StatusOK}[data.HTTP.SuccessCount > 0], "L7 HTTP", data.HTTP.Target, fmt.Sprintf("%d/%d ok", data.HTTP.SuccessCount, data.HTTP.RequestsSent), fmt.Sprintf("total=%.1fms", data.HTTP.AvgTotalTime))
 	}
 	if data.SNMP != nil {
-		addRow(StatusOK, "L7 SNMP", data.SNMP.SysName, strconv.Itoa(len(data.SNMP.Interfaces))+" ifaces", data.SNMP.SysDescr)
+		add(StatusOK, "L7 SNMP", data.SNMP.SysName, strconv.Itoa(len(data.SNMP.Interfaces))+" ifaces", data.SNMP.SysDescr)
 	}
 	overall := worstStatus(pingSt, tlsSt)
 	if pingSt == StatusFAIL && len(openPorts) > 0 {
@@ -390,27 +376,20 @@ func buildHostCardSummary(data *HostCardData) ([]ascii.TableRow, []string, []flo
 
 func buildLANRadarRows(arpRes *probe.ARPSweepResult, discRes *probe.DiscoverResult) ([]probe.ARPNeighbor, []probe.ARPNeighbor, []ascii.TableRow, []string) {
 	var phys, virt []probe.ARPNeighbor
+	var rows, virtRows []ascii.TableRow
+	var health, virtHealth []string
 	if arpRes != nil {
-		for i := range arpRes.Neighbors {
-			if arpRes.Neighbors[i].IsLAA {
-				virt = append(virt, arpRes.Neighbors[i])
+		for _, n := range arpRes.Neighbors {
+			if n.IsLAA {
+				virt, virtRows, virtHealth = append(virt, n), append(virtRows, ascii.TableRow{Status: StatusINFO, Cells: []string{groupLabelVirtualLAA, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(virtHealth, StatusINFO)
 			} else {
-				phys = append(phys, arpRes.Neighbors[i])
+				phys, rows, health = append(phys, n), append(rows, ascii.TableRow{Status: StatusOK, Cells: []string{groupLabelPhysicalUAA, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(health, StatusOK)
 			}
 		}
 	}
-	rows, health := make([]ascii.TableRow, 0, len(phys)+len(virt)), make([]string, 0, len(phys)+len(virt))
-	appendARP := func(list []probe.ARPNeighbor, label, st string) {
-		for i := range list {
-			n := &list[i]
-			rows, health = append(rows, ascii.TableRow{Status: st, Cells: []string{label, n.IP, n.MAC, firstNonEmpty(n.Hostname, n.Vendor)}}), append(health, st)
-		}
-	}
-	appendARP(phys, groupLabelPhysicalUAA, StatusOK)
-	appendARP(virt, groupLabelVirtualLAA, StatusINFO)
+	rows, health = append(rows, virtRows...), append(health, virtHealth...)
 	if discRes != nil {
-		for i := range discRes.Services {
-			s := &discRes.Services[i]
+		for _, s := range discRes.Services {
 			rows, health = append(rows, ascii.TableRow{Status: StatusINFO, Cells: []string{"[SERVICE - " + strings.ToUpper(s.Protocol) + "]", s.IP, ":" + strconv.Itoa(s.Port), firstNonEmpty(s.Name, s.ServiceType, s.Server)}}), append(health, StatusINFO)
 		}
 	}
@@ -418,33 +397,66 @@ func buildLANRadarRows(arpRes *probe.ARPSweepResult, discRes *probe.DiscoverResu
 }
 
 func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]ascii.TableRow, []float64, []string, []string, string) {
-	var rows []ascii.TableRow
-	var spark []float64
-	var healthStr, notes []string
-	overall := StatusOK
+	var hops []probe.MTRHop
+	useMTR := false
 	if data.MTR != nil {
-		for i := range data.MTR.Hops {
-			h, st, flag := &data.MTR.Hops[i], StatusOK, "ok"
-			if h.LossPct > 0 {
-				data.LossHops, st, flag = append(data.LossHops, h.Hop), StatusWARN, "loss"
-				if h.LossPct >= 50 {
-					st = StatusFAIL
-				}
-			}
-			if h.StDevMs >= jitterWarnThresholdMs || (h.WorstMs-h.BestMs) >= jitterSpreadWarnMs {
-				data.HighJitterHop, st, flag = append(data.HighJitterHop, h.Hop), worstStatus(st, StatusWARN), flag+"+jitter"
-			}
-			overall = worstStatus(overall, st)
-			rows = append(rows, ascii.TableRow{Status: st, Cells: []string{strconv.Itoa(h.Hop), h.IP, fmt.Sprintf("%.0f%%", h.LossPct), fmt.Sprintf("%.2f", h.AvgMs), fmt.Sprintf("%.2f", h.StDevMs), flag}})
-			spark, healthStr = append(spark, h.AvgMs), append(healthStr, st)
+		data.ProbeMode, data.Reached, data.SilentTransitHops, data.DestLossPct = data.MTR.ProbeMode, data.MTR.Reached, data.MTR.SilentTransitHops, data.MTR.DestLossPct
+		if useMTR = data.MTR.Reached || data.Traceroute == nil || (!data.Traceroute.ReachedDestination && (len(data.MTR.Hops) > 0 || len(data.Traceroute.Hops) == 0)); useMTR {
+			hops = data.MTR.Hops
 		}
-	} else if mtrErr != nil {
+	}
+	if !useMTR && data.Traceroute != nil {
+		data.ProbeMode, data.Reached, data.SilentTransitHops, data.DestLossPct = firstNonEmpty(data.Traceroute.ProbeMode, data.ProbeMode), data.Traceroute.ReachedDestination, data.Traceroute.SilentTransitHops, data.Traceroute.DestLossPct
+		hops = make([]probe.MTRHop, len(data.Traceroute.Hops))
+		for i, h := range data.Traceroute.Hops {
+			loss := map[bool]float64{true: 100}[h.TimedOut && !h.Silent]
+			if !h.Silent && !h.TimedOut && data.DestLossPct > 0 && (h.Segment == "Destination" || (data.ResolvedIP != "" && h.IP == data.ResolvedIP) || (data.Reached && i == len(data.Traceroute.Hops)-1)) {
+				loss = data.DestLossPct
+			}
+			hops[i] = probe.MTRHop{Hop: h.Hop, IP: h.IP, Segment: h.Segment, Silent: h.Silent, LossPct: loss, AvgMs: h.AvgRTTMs}
+		}
+	}
+	if !data.Reached && data.DestLossPct == 0 && (data.MTR != nil || data.Traceroute != nil) {
+		data.DestLossPct = 100
+	}
+	rows, spark, health, overall, silent := make([]ascii.TableRow, 0, len(hops)), make([]float64, 0, len(hops)), make([]string, 0, len(hops)), StatusOK, 0
+	for i := range hops {
+		h, st, flag := &hops[i], StatusOK, "ok"
+		if h.Silent {
+			silent++
+			rows, spark, health = append(rows, ascii.TableRow{Status: StatusOK, Cells: []string{strconv.Itoa(h.Hop), firstNonEmpty(h.IP, "*"), "*", "*", "*", "silent (CoPP)"}}), append(spark, 0), append(health, StatusOK)
+			continue
+		}
+		isDest := h.Segment == "Destination" || (data.ResolvedIP != "" && h.IP == data.ResolvedIP) || (data.Reached && i == len(hops)-1)
+		if h.LossPct >= 20 || (!data.Reached && h.LossPct >= 50) {
+			data.LossHops, flag = append(data.LossHops, h.Hop), "loss"
+			st = map[bool]string{true: StatusFAIL, false: StatusWARN}[h.LossPct >= 50 && (isDest || !data.Reached)]
+		}
+		if useMTR && (h.StDevMs >= jitterWarnThresholdMs || (h.WorstMs-h.BestMs) >= jitterSpreadWarnMs) {
+			data.HighJitterHop, st, flag = append(data.HighJitterHop, h.Hop), worstStatus(st, StatusWARN), map[bool]string{true: "jitter", false: flag + "+jitter"}[flag == "ok"]
+		}
+		avgCell, stdevCell := map[bool]string{true: "*", false: fmt.Sprintf("%.2f", h.AvgMs)}[!useMTR && h.LossPct >= 100], map[bool]string{true: fmt.Sprintf("%.2f", h.StDevMs), false: "-"}[useMTR]
+		overall, rows, spark, health = worstStatus(overall, st), append(rows, ascii.TableRow{Status: st, Cells: []string{strconv.Itoa(h.Hop), firstNonEmpty(h.IP, "*"), fmt.Sprintf("%.0f%%", h.LossPct), avgCell, stdevCell, flag}}), append(spark, h.AvgMs), append(health, st)
+	}
+	data.SilentTransitHops = max(data.SilentTransitHops, silent)
+	var notes []string
+	if mtrErr != nil && data.MTR == nil {
 		notes, overall = append(notes, "MTR unavailable: "+mtrErr.Error()), worstStatus(overall, StatusWARN)
 	}
+	if (!data.Reached && (data.MTR != nil || data.Traceroute != nil || (data.Ping != nil && data.Ping.PacketsReceived == 0 && !(mtrErr != nil && trErr != nil)))) || (data.Reached && data.DestLossPct >= 50) {
+		overall = StatusFAIL
+	} else if data.Reached && data.DestLossPct >= 20 {
+		overall = worstStatus(overall, StatusWARN)
+	}
+	if data.SilentTransitHops > 0 {
+		suffix := map[bool]string{false: "hop(s) did not reply before the unreachable tail.", true: "router(s) dropped ICMP TTL replies under CoPP while traffic reached the destination."}[data.Reached]
+		notes = append(notes, fmt.Sprintf("%d silent transit %s", data.SilentTransitHops, suffix))
+	}
 	if data.MTU != nil {
-		data.Blackhole = data.MTU.BlackholeDetected
-		if data.Blackhole {
+		if data.Blackhole = data.MTU.BlackholeDetected; data.Blackhole && (!data.Reached || data.MTU.DiscoveredMTU == 0) {
 			overall = StatusFAIL
+		} else if data.Blackhole || (data.MTU.DiscoveredMTU > 0 && data.MTU.DiscoveredMTU < 1500) {
+			overall = worstStatus(overall, StatusWARN)
 		}
 		notes = append(notes, fmt.Sprintf("Path MTU=%d WG=%d blackhole=%v", data.MTU.DiscoveredMTU, data.MTU.WireGuardSafeMTU, data.Blackhole))
 	} else if mtuErr != nil {
@@ -455,10 +467,7 @@ func analyzePathAutopsy(data *PathAutopsyData, mtuErr, mtrErr, trErr error) ([]a
 	} else if data.Traceroute != nil {
 		notes = append(notes, fmt.Sprintf("Traceroute hops=%d reached=%v", len(data.Traceroute.Hops), data.Traceroute.ReachedDestination))
 	}
-	if data.Ping != nil && data.Ping.PacketsReceived == 0 && (data.MTR == nil || !data.MTR.Reached) {
-		overall = StatusFAIL
-	}
-	return rows, spark, healthStr, notes, overall
+	return rows, spark, health, notes, overall
 }
 
 func pollWakeReadiness(ctx context.Context, deps Dependencies, params *WakeVerifyParams, waitDur time.Duration) (bool, string, int, *ping.PingResponse, *port_scan.PortScanResponse) {
@@ -471,31 +480,20 @@ func pollWakeReadiness(ctx context.Context, deps Dependencies, params *WakeVerif
 		iterCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
 		readyVia := ""
 		if strings.TrimSpace(params.Ports) != "" {
-			if scanRes, err := port_scan.Execute(iterCtx, port_scan.PortScanParams{Target: params.Target, Ports: params.Ports, TimeoutMS: intPtr(500)}, deps.Guard); err == nil {
-				lastScan = scanRes
-				if scanRes.OpenCount > 0 {
-					readyVia = "tcp_port_scan"
-				}
+			if lastScan, _ = port_scan.Execute(iterCtx, port_scan.PortScanParams{Target: params.Target, Ports: params.Ports, TimeoutMS: intPtr(500)}, deps.Guard); lastScan != nil && lastScan.OpenCount > 0 {
+				readyVia = "tcp_port_scan"
 			}
-		} else if pingRes, err := ping.Execute(iterCtx, ping.PingParams{Target: params.Target, Count: intPtr(1)}, &pingCfg); err == nil {
-			lastPing = pingRes
-			if pingRes.PacketsReceived > 0 {
-				readyVia = pingRes.ProbeMode
-			}
+		} else if lastPing, _ = ping.Execute(iterCtx, ping.PingParams{Target: params.Target, Count: intPtr(1)}, &pingCfg); lastPing != nil && lastPing.PacketsReceived > 0 {
+			readyVia = lastPing.ProbeMode
 		}
 		cancel()
-		if readyVia != "" {
-			return true, readyVia, attempts, lastPing, lastScan
+		if readyVia != "" || !time.Now().Before(deadline) {
+			return readyVia != "", readyVia, attempts, lastPing, lastScan
 		}
-		if !time.Now().Before(deadline) {
-			break
-		}
-		timer := time.NewTimer(min(250*time.Millisecond, time.Until(deadline)))
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return false, "", attempts, lastPing, lastScan
-		case <-timer.C:
+		case <-time.After(min(250*time.Millisecond, time.Until(deadline))):
 		}
 	}
 	return false, "", attempts, lastPing, lastScan

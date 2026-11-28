@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional version tag to publish (e.g. v2.0.1). Defaults to pushed tag or server.json version."
+        description: "Optional version tag to publish (e.g. v2.1.0). Defaults to pushed tag or server.json version."
         required: false
         type: string
 

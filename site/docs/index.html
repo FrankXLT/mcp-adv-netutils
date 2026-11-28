@@ -21,8 +21,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&amp;display=swap" rel="stylesheet" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="../assets/oaw_topbar.css?v=2.0.1" />
-  <link rel="stylesheet" href="../assets/site.css?v=2.0.1" />
+  <link rel="stylesheet" href="../assets/oaw_topbar.css?v=2.1.0" />
+  <link rel="stylesheet" href="../assets/site.css?v=2.1.0" />
 </head>
 <body>
   <a class="oaw-skip-link" href="#mainContent">Skip to documentation</a>
@@ -174,7 +174,7 @@
           <h1 class="section-title">Guide &amp; Technical Reference</h1>
           <p class="section-lead">Complete specification for <code>mcp-adv-netutils</code>: Docker &amp; Linux deployment, Network Studio (<code>/web</code>), all 33 registered MCP tools (including <code>manage_saved_destinations</code>), MCP &amp; CLI terminal formatting, 30-day cron retention, security architecture, and bundled agent skills.</p>
           <div id="docsHeroMeta" class="docs-meta-line">
-            <span>v2.0.1</span>
+            <span>v2.1.0</span>
             <span>33 Registered MCP Tools</span>
             <span>41.5 MB Unpacked (11.4 MB Compressed)</span>
           </div>
@@ -248,13 +248,13 @@ CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -tags netgo -o mcp-
               <p class="docs-chapter-summary">Interactive browser console with Apache ECharts SVG graphs, Saved Destinations, goal-grouped checks, and side-by-side Past Run comparisons.</p>
             </header>
             <div class="docs-prose">
-              <p>Open <code>/web</code> from any desktop, tablet, or phone browser—or preview offline sample fixtures in the <a href="../demo/">Live Demo</a> (<code>?demo=1</code>)—across four themes (<code>Pure White</code>, <code>Warm Paper</code>, <code>Dark</code>, <code>Dark Paper</code>) and two display densities (<code>Comfortable</code> / <code>Compact</code>).</p>
+              <p>Open <code>/web</code> from any desktop, tablet, or phone browser—or preview offline sample fixtures in the <a href="../demo/">Live Demo</a> (<code>?demo=1</code>)—via a consolidated <strong>Appearance &#9662;</strong> dropdown uniting four themes (<code>Pure White</code>, <code>Warm Paper</code>, <code>Dark</code>, <code>Dark Paper</code>) and two spacing modes (<code>Comfortable</code> / <code>Compact</code>).</p>
               <h3>Workspace Highlights</h3>
               <ul>
                 <li><strong>Interactive KPI Triage Cards:</strong> Clickable, keyboard-accessible summary cards display <strong>24h Uptime %</strong> (<code>&mdash;</code> when no scheduled checks exist yet), <strong>Active Problems</strong>, <strong>Saved Destinations</strong>, and <strong>Saved History Size</strong>, jumping directly to the corresponding section.</li>
                 <li><strong>Pinned Destinations &amp; Above-the-Fold Quick List:</strong> Favorite targets appear beside <strong>+ Add Destination</strong> and <strong>Scan Pinned</strong> at the top of <strong>Checks</strong>, backed by a compact desktop <strong>Saved Destinations</strong> list directly beneath <strong>Run a Check</strong> and the full table below.</li>
-                <li><strong>4 Goal Category Filters:</strong> Filter <strong>Check Type</strong> cleanly across <strong>Path &amp; Ping</strong>, <strong>Web &amp; DNS</strong>, <strong>Ports &amp; Host</strong>, and <strong>Wake</strong> with context-aware fields for <strong>Port Group</strong>, Wake MAC chips, and a direct jump link to full subnet scans in <strong>Local Network</strong>.</li>
-                <li><strong>Apache ECharts SVG Visualizations (<code>renderer: 'svg'</code>):</strong> Renders crisp theme-aware path latency &amp; packet-loss whiskers, HTTP/TLS response timing waterfalls, DNS resolver comparison bars, and <code>24h / 7d / 30d</code> uptime &amp; response-time timelines.</li>
+                <li><strong>4 Goal Category Filters &amp; Live In-Flight Progress Card:</strong> Filter <strong>Check Type</strong> across <strong>Path &amp; Ping</strong> (including single-chart <strong>Multi-Point Ping</strong>), <strong>Web &amp; DNS</strong>, <strong>Ports &amp; Host</strong>, and <strong>Wake</strong> with context-aware <strong>Port Group</strong>, Wake MAC chips, and <strong>Local Network</strong> links, while active runs stream a live <strong>In-Flight Progress Card</strong> with an abortable <strong>Cancel</strong> button.</li>
+                <li><strong>Apache ECharts SVG Visualizations (<code>renderer: 'svg'</code>):</strong> Renders crisp theme-aware single-chart <strong>Multi-Point Ping</strong> comparisons, route trace and MTR path charts with collapsed neutral gray silent transit router bands, HTTP/TLS timing waterfalls, DNS resolver bars, and <code>24h / 7d / 30d</code> uptime timelines.</li>
                 <li><strong>Chart / Table Toggle &amp; Export Copy:</strong> Flip any result card or past-run view between <strong>Chart</strong> and <strong>Table</strong> modes, and copy formatted Markdown with <strong>Copy Summary</strong> or tab-separated rows with <strong>Copy Data</strong> (TSV).</li>
                 <li><strong>Local Network Inventory:</strong> Search devices by name, IP, MAC, or vendor, choose a comparison baseline, and filter <strong>All</strong>, <strong>Physical Hardware</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Changed vs. Baseline</strong> with inline response bars and 1-click <code>Ping</code>, <code>Check Ports</code>, <code>Wake</code>, and <code>Save</code> actions.</li>
                 <li><strong>Schedule &amp; History with Past Run Drawer (<code>&lt;dialog&gt;</code>):</strong> Inspect <code>24h / 7d / 30d</code> timelines, enable automated 5-minute monitoring via <strong>+ Enable 5-Min Monitoring</strong>, or click any row in <strong>Past Check Runs</strong> to open a native modal drawer with <strong>Run Again &amp; Compare</strong>.</li>
@@ -286,7 +286,7 @@ CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -tags netgo -o mcp-
                 <tbody>
                   <tr><td><code>mac_vendor_lookup</code></td><td>L2</td><td>Embedded 39,800+ IEEE OUI table; classifies physical <code>[UAA]</code> vs virtual <code>[LAA]</code></td></tr>
                   <tr><td><code>ping</code></td><td>L3</td><td>Per-call Echo ID isolation, IPv4/IPv6 TTL control messages, explicit <code>icmp</code> vs <code>tcp_fallback</code></td></tr>
-                  <tr><td><code>traceroute</code></td><td>L3</td><td>Rejects leading <code>-</code> targets, inserts <code>--</code> delimiter, bounds concurrent hop PTR lookups</td></tr>
+                  <tr><td><code>traceroute</code></td><td>L3</td><td>Fast ICMP &rarr; TCP 443/80 &rarr; UDP auto-fallback, silent transit router separation, and bounded hop PTR lookups with <code>--</code> target safety</td></tr>
                   <tr><td><code>tcp_port_scan</code></td><td>L4</td><td>Concurrent TCP connect with single-resolution dial and presets (<code>common</code>, <code>homelab</code>, <code>web</code>, <code>iot</code>)</td></tr>
                   <tr><td><code>dns_reverse_batch</code></td><td>L7</td><td>Concurrent reverse PTR resolution capped at <code>256</code> validated IPs per call</td></tr>
                   <tr><td><code>wol_wake</code></td><td>L2</td><td>Transmits 102-byte UDP Wake-on-LAN Magic Packet frames (port <code>7</code> or <code>9</code>)</td></tr>
@@ -309,7 +309,7 @@ CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -tags netgo -o mcp-
                 <tbody>
                   <tr><td><code>arp_neighbor_sweep</code></td><td>L2</td><td>OS/ARP neighbor discovery (<code>mdlayher/arp</code>) enriched with OUI vendors and UAA/LAA flags</td></tr>
                   <tr><td><code>mtu_path_probe</code></td><td>L3</td><td>Sends DF-bit probes across <code>1500</code>, <code>1492</code>, <code>1420</code>, and <code>1280</code> bytes to detect path fragmentation black holes</td></tr>
-                  <tr><td><code>mtr_path_quality</code></td><td>L3</td><td>Multi-cycle per-hop loss, min/avg/max RTT, and jitter matrix across the path</td></tr>
+                  <tr><td><code>mtr_path_quality</code></td><td>L3</td><td>Parallel per-TTL waves (<code>~2&ndash;5s</code>) with unique per-hop/per-cycle <code>(ID, Seq)</code> encoding, TCP 443/80 fallback, and silent transit router (<code>CoPP</code>) separation (<code>silent_transit_hops</code>, <code>dest_loss_pct</code>)</td></tr>
                   <tr><td><code>mdns_ssdp_discover</code></td><td>L7</td><td>Bounded mDNS (<code>hashicorp/mdns</code>) and SSDP/UPnP local service discovery</td></tr>
                   <tr><td><code>split_dns_audit</code></td><td>L7</td><td>Audits record parity and TTL drift between internal resolvers and external DoH</td></tr>
                   <tr><td><code>snmp_switch_port</code></td><td>L2</td><td>Read-only SNMP (<code>gosnmp</code>) switch port, VLAN, LLDP, and MAC FDB correlation</td></tr>
@@ -347,7 +347,7 @@ CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -tags netgo -o mcp-
                   <tr><td><code>get_cron_status</code></td><td>Cron / Archive</td><td>Sub-5ms <code>24h</code>, <code>7d</code>, and <code>30d</code> health strips and active consecutive-failure alert counts</td></tr>
                   <tr><td><code>manage_cron_watchlist</code></td><td>Cron / Archive</td><td>Inspects, adds, updates, pauses, resumes, runs, or removes <code>watchlist.yaml</code> entries</td></tr>
                   <tr><td><code>get_job_report</code></td><td>Cron / Archive</td><td>Re-pulls any persisted <code>job_id</code> diagnostic run within its <code>30d</code> <code>expires_at</code> window</td></tr>
-                  <tr><td><code>render_run_digest</code></td><td>Digest Renderer</td><td>Consolidates and re-renders stored <code>job_id</code> runs into <code>default</code>, <code>quick</code>, <code>rich</code>, or <code>json</code></td></tr>
+                  <tr><td><code>render_run_digest</code></td><td>Digest Renderer</td><td>Re-renders <code>job_ids</code> or runs 1-call time-window audits (<code>window</code>: <code>1h</code>/<code>6h</code>/<code>24h</code>/<code>7d</code>/<code>30d</code>, <code>since</code>/<code>until</code>, <code>target</code>, <code>tool_name</code>, <code>status</code>, <code>incidents_only</code>, <code>limit</code>, <code>window_summary</code> pass rate &amp; top problem targets) into <code>default</code>, <code>quick</code>, <code>rich</code>, or <code>json</code></td></tr>
                   <tr><td><code>unlock_netutils</code></td><td>Deadbolt</td><td>Voice-normalizes passphrase and opens 30-minute Deadbolt window via SHA-256</td></tr>
                   <tr><td><code>lock_netutils</code></td><td>Deadbolt</td><td>Immediately closes the Deadbolt window before the 30-minute timer expires</td></tr>
                 </tbody>
@@ -379,7 +379,7 @@ CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -tags netgo -o mcp-
               <div class="docs-callout" data-tone="tip">
                 <strong>Verbatim Display Rule:</strong> When displaying MCP terminal cards in chat, wrap <code>default</code>, <code>quick</code>, and <code>rich</code> output verbatim inside a fenced <code>text</code> code block so markdown engines never reflow fixed columns.
               </div>
-              <p>To inspect an older incident at a different width over MCP without re-sending packets, call <code>render_run_digest</code> with the archived <code>job_id</code> and desired <code>style</code>.</p>
+              <p>To re-render archived runs or audit historical time windows over MCP without re-sending packets, call <code>render_run_digest</code> with <code>job_ids</code> or time-window filters (<code>window</code>: <code>1h</code>/<code>6h</code>/<code>24h</code>/<code>7d</code>/<code>30d</code>, <code>since</code>/<code>until</code>, <code>target</code>, <code>tool_name</code>, <code>status</code>, <code>incidents_only</code>, <code>limit</code>) for a <code>window_summary</code> pass rate and top problem targets in your chosen <code>style</code>.</p>
             </div>
           </section>
 
@@ -487,6 +487,6 @@ CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -tags netgo -o mcp-
     </div>
   </footer>
 
-  <script defer src="../assets/site.js?v=2.0.1"></script>
+  <script defer src="../assets/site.js?v=2.1.0"></script>
 </body>
 </html>

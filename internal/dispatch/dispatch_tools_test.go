@@ -402,9 +402,10 @@ func TestSyntheticExtractorsBuildersAndArgReader(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 
-	dp := buildRecipeExec("recipe_diff_ping", &recipes.RecipeResult{Status: "WARN", Card: &ascii.ReportCard{Title: "DP", Target: "10.0.0.1"}, Data: recipes.DiffPingData{Hops: []recipes.DiffPingHop{{Stage: "GW", AvgRTTMs: 1.5}, {Stage: "T", AvgRTTMs: 5, LossPct: 25}}}}, "10.0.0.1", 12, now)
+	dp := buildRecipeExec("recipe_diff_ping", &recipes.RecipeResult{Status: "WARN", Card: &ascii.ReportCard{Title: "DP", Target: "10.0.0.1"}, Data: recipes.DiffPingData{Hops: []recipes.DiffPingHop{{Stage: "GW", Address: "192.168.1.1", AvgRTTMs: 1.5}, {Stage: "T", Address: "10.0.0.1", AvgRTTMs: 5, LossPct: 25}}}}, "10.0.0.1", 12, now)
 	require.Len(t, dp.Whiskers, 2)
-	assert.Equal(t, 1.5, dp.Waterfall[1].StartMs)
+	assert.Nil(t, dp.Waterfall)
+	assert.Equal(t, []string{"GW", "192.168.1.1"}, []string{dp.Whiskers[0].Segment, dp.Whiskers[0].Hostname})
 	validTrue, expDays := true, 45
 	dh := buildRecipeExec("recipe_diff_http", &recipes.RecipeResult{Data: recipes.DiffHTTPData{Endpoints: []recipes.DiffHTTPEndpoint{{URL: "https://a.example:8443/p", DNSMs: 1, TCPMs: 2, TLSMs: 3, TTFBMs: 4, TotalMs: 10, ChainValid: &validTrue, ExpiresDays: &expDays, Issuer: "CN=R11,O=Let's Encrypt,C=US", TLSVersion: "TLSv1.3", CipherSuite: "TLS_AES_256_GCM_SHA384", NotAfter: "2027-02-08T00:00:00Z"}}}}, "https://a", 10, now)
 	require.Len(t, dh.Waterfall, 5)
@@ -439,13 +440,44 @@ func TestSyntheticExtractorsBuildersAndArgReader(t *testing.T) {
 	assert.Equal(t, "ACME Corp", formatCertIssuer("O=ACME Corp,CN=acme corp"))
 	assert.Equal(t, "C=US", formatCertIssuer(" C=US "))
 	assert.Equal(t, "", formatCertIssuer("   "))
-	assert.Len(t, buildRecipeExec("recipe_path_autopsy", &recipes.RecipeResult{Data: recipes.PathAutopsyData{MTR: &probe.MTRResult{Hops: []probe.MTRHop{{Hop: 1, IP: "10.0.0.1", BestMs: 1, AvgMs: 2, WorstMs: 3}}}}}, "10.0.0.1", 5, now).Whiskers, 1)
-	paTR := extractPathAutopsyWhiskers(&recipes.PathAutopsyData{Traceroute: &traceroute.TracerouteResponse{Hops: []traceroute.HopResult{{Hop: 1, IP: "*", TimedOut: true}, {Hop: 2, IP: "1.1.1.1", RTTMs: []float64{2, 8, 4}, AvgRTTMs: 4.6}}}})
-	assert.Equal(t, []float64{100, 2, 8}, []float64{paTR[0].LossPct, paTR[1].MinMs, paTR[1].MaxMs})
+	paMTR := buildRecipeExec("recipe_path_autopsy", &recipes.RecipeResult{Data: recipes.PathAutopsyData{
+		MTR:        &probe.MTRResult{Reached: true, Hops: []probe.MTRHop{{Hop: 1, IP: "*", Segment: "Transit", Silent: true}, {Hop: 2, IP: "10.0.0.1", Hostname: "edge.lan", Segment: "Destination", BestMs: 1, AvgMs: 2, WorstMs: 3}}},
+		Traceroute: &traceroute.TracerouteResponse{ReachedDestination: true, Hops: []traceroute.HopResult{{Hop: 1, IP: "10.0.0.9"}}},
+	}}, "10.0.0.1", 5, now)
+	require.Len(t, paMTR.Whiskers, 2)
+	assert.True(t, paMTR.Whiskers[0].Silent)
+	assert.Equal(t, []string{"Destination", "edge.lan"}, []string{paMTR.Whiskers[1].Segment, paMTR.Whiskers[1].Hostname})
+	paTR := extractPathAutopsyWhiskers(&recipes.PathAutopsyData{
+		MTR:        &probe.MTRResult{Reached: false},
+		Traceroute: &traceroute.TracerouteResponse{ReachedDestination: true, DestLossPct: 25, Hops: []traceroute.HopResult{{Hop: 1, IP: "*", Segment: "Transit", Silent: true, TimedOut: true}, {Hop: 2, IP: "1.1.1.1", Hostname: "one.one", Segment: "Destination", RTTMs: []float64{2, 8, 4}, AvgRTTMs: 4.6}}},
+	})
+	require.Len(t, paTR, 2)
+	assert.True(t, paTR[0].Silent)
+	assert.Equal(t, "Transit", paTR[0].Segment)
+	assert.Equal(t, []float64{100, 25, 2, 8}, []float64{paTR[0].LossPct, paTR[1].LossPct, paTR[1].MinMs, paTR[1].MaxMs})
+	assert.Equal(t, []string{"Destination", "one.one"}, []string{paTR[1].Segment, paTR[1].Hostname})
+	paKeepMTR := extractPathAutopsyWhiskers(&recipes.PathAutopsyData{
+		MTR:        &probe.MTRResult{Reached: false, Hops: []probe.MTRHop{{Hop: 1, IP: "10.0.0.1", LossPct: 100}}},
+		Traceroute: &traceroute.TracerouteResponse{ReachedDestination: false, Hops: []traceroute.HopResult{{Hop: 1, IP: "*", TimedOut: true}, {Hop: 2, IP: "*", TimedOut: true}}},
+	})
+	require.Len(t, paKeepMTR, 1)
+	assert.Equal(t, "Hop 1 (10.0.0.1)", paKeepMTR[0].Label)
 	assert.Nil(t, extractPathAutopsyWhiskers(&recipes.PathAutopsyData{}))
 	lo, hi := minMaxFloat(nil, 3.5)
 	assert.Equal(t, []float64{3.5, 3.5}, []float64{lo, hi})
 	require.Len(t, buildRecipeExec("recipe_wake_verify", &recipes.RecipeResult{Data: recipes.WakeVerifyData{WakeToReadyM: 420}}, "nas", 5, now).Waterfall, 1)
+
+	mtrCoPP := buildMTRExec(&probe.MTRResult{Target: "1.1.1.1", ProbeMode: "tcp_443", Reached: true, SilentTransitHops: 1, DestLossPct: 0, Hops: []probe.MTRHop{{Hop: 1, IP: "*", Segment: "Transit", Silent: true, LossPct: 100}, {Hop: 2, IP: "1.1.1.1", Hostname: "one.one", Segment: "Destination", BestMs: 2, AvgMs: 3, WorstMs: 4}}}, 1)
+	assert.Equal(t, statusOK, mtrCoPP.Status)
+	assert.Equal(t, statusINFO, mtrCoPP.Card.Rows[0].Status)
+	assert.True(t, mtrCoPP.Whiskers[0].Silent)
+	trCoPP := buildTracerouteExec(&traceroute.TracerouteResponse{Target: "1.1.1.1", ProbeMode: "tcp_443", ReachedDestination: true, SilentTransitHops: 1, DestLossPct: 25, Hops: []traceroute.HopResult{{Hop: 1, IP: "*", Segment: "Transit", Silent: true, TimedOut: true}, {Hop: 2, IP: "1.1.1.1", Hostname: "one.one", Segment: "Destination", RTTMs: []float64{3, 5}, AvgRTTMs: 4}}}, 1)
+	assert.Equal(t, statusWARN, trCoPP.Status)
+	assert.Equal(t, statusINFO, trCoPP.Card.Rows[0].Status)
+	assert.Equal(t, statusWARN, trCoPP.Card.Rows[1].Status)
+	assert.Equal(t, float64(25), trCoPP.Whiskers[1].LossPct)
+	assert.True(t, trCoPP.Whiskers[0].Silent)
+	assert.Equal(t, []string{"Destination", "one.one"}, []string{trCoPP.Whiskers[1].Segment, trCoPP.Whiskers[1].Hostname})
 
 	for _, tc := range []struct {
 		want string
@@ -454,7 +486,7 @@ func TestSyntheticExtractorsBuildersAndArgReader(t *testing.T) {
 		{statusFAIL, buildPingExec(&ping.PingResponse{Target: "t", PacketsSent: 1, Results: []ping.PingResult{{Sequence: 1}}}, 1)},
 		{statusWARN, buildPingExec(&ping.PingResponse{Target: "t", PacketsSent: 2, PacketsReceived: 1, PacketLoss: 50, Results: []ping.PingResult{{Sequence: 1, Success: true}, {Sequence: 2}}}, 1)},
 		{statusFAIL, buildTracerouteExec(&traceroute.TracerouteResponse{Target: "t"}, 1)},
-		{statusWARN, buildTracerouteExec(&traceroute.TracerouteResponse{Target: "t", Hops: []traceroute.HopResult{{Hop: 1, IP: "*", TimedOut: true}}}, 1)},
+		{statusFAIL, buildTracerouteExec(&traceroute.TracerouteResponse{Target: "t", Hops: []traceroute.HopResult{{Hop: 1, IP: "*", TimedOut: true}}}, 1)},
 		{statusFAIL, buildResolverExec(&resolver.ResolverResponse{Hostname: "bad", Failed: true, Error: "nx"}, 1)},
 		{statusOK, buildTLSExec(&tls.CheckResult{Domain: "a", ChainValid: true, PeerCertificates: []tls.CertificateInfo{{Subject: "a", ExpiresInDays: 90}}}, 1)},
 		{statusFAIL, buildTLSExec(&tls.CheckResult{Domain: "a", PeerCertificates: []tls.CertificateInfo{{Subject: "a", IsExpired: true}}}, 1)},
@@ -466,8 +498,8 @@ func TestSyntheticExtractorsBuildersAndArgReader(t *testing.T) {
 		{statusOK, buildARPSweepExec(&probe.ARPSweepResult{PhysicalCount: 1, VirtualCount: 1, Neighbors: []probe.ARPNeighbor{{IP: "192.168.1.2", MAC: "9C:8E:CD:0A:91:0C"}, {IP: "172.17.0.2", MAC: "02:42:ac:11:00:02", IsLAA: true}}}, 1)},
 		{statusFAIL, buildMTUProbeExec(&probe.MTUProbeResult{Target: "a", BlackholeDetected: true, Steps: []probe.MTUStep{{WireMTU: 1500}}}, 1)},
 		{statusFAIL, buildMTRExec(&probe.MTRResult{Target: "a"}, 1)},
-		{statusFAIL, buildMTRExec(&probe.MTRResult{Target: "a", Hops: []probe.MTRHop{{Hop: 1, IP: "1.1.1.1", LossPct: 60}, {Hop: 2, IP: "1.1.1.2", StDevMs: 25}}}, 1)},
-		{statusWARN, buildMTRExec(&probe.MTRResult{Target: "a", Hops: []probe.MTRHop{{Hop: 1, IP: "1.1.1.1"}}}, 1)},
+		{statusFAIL, buildMTRExec(&probe.MTRResult{Target: "a", Reached: true, DestLossPct: 60, Hops: []probe.MTRHop{{Hop: 1, IP: "1.1.1.1", LossPct: 60}, {Hop: 2, IP: "1.1.1.2", StDevMs: 25}}}, 1)},
+		{statusWARN, buildMTRExec(&probe.MTRResult{Target: "a", Reached: true, DestLossPct: 25, Hops: []probe.MTRHop{{Hop: 1, IP: "1.1.1.1", LossPct: 25}}}, 1)},
 		{statusWARN, buildDiscoverExec(&probe.DiscoverResult{Protocol: "both", Warnings: []string{"w"}}, 1)},
 		{statusOK, buildDiscoverExec(&probe.DiscoverResult{Protocol: "ssdp", Count: 1, Services: []probe.DiscoveredService{{Protocol: "ssdp", IP: "127.0.0.1", Port: 8080, Name: "d"}}}, 1)},
 		{statusFAIL, buildSplitDNSExec(&probe.SplitDNSResult{Domain: "a", OverallStatus: "ERROR", Comparisons: []probe.SplitDNSComparison{{RecordType: "A", Status: "ERROR", LocalErr: "x", RemoteErr: "y"}}}, 1)},

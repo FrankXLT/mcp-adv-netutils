@@ -6,54 +6,27 @@
   const ALLOWED_THEMES = { white: 1, paper: 1, "dark-paper": 1, dark: 1 };
 
   (function restoreEarlyThemeAndDensity() {
-    let theme = "white";
-    let density = "d2";
+    let theme = "white", density = "d2";
     try {
-      const params = new URLSearchParams(globalScope.location.search || "");
-      const qTheme = params.get("theme");
-      const savedTheme = globalScope.localStorage.getItem(THEME_KEY);
-      const savedDensity = globalScope.localStorage.getItem(DENSITY_KEY);
-      if (qTheme && ALLOWED_THEMES[qTheme]) theme = qTheme;
-      else if (savedTheme && ALLOWED_THEMES[savedTheme]) theme = savedTheme;
+      const params = new URLSearchParams(globalScope.location.search || ""), qTheme = params.get("theme");
+      const savedTheme = globalScope.localStorage.getItem(THEME_KEY), savedDensity = globalScope.localStorage.getItem(DENSITY_KEY);
+      if (qTheme && ALLOWED_THEMES[qTheme]) theme = qTheme; else if (savedTheme && ALLOWED_THEMES[savedTheme]) theme = savedTheme;
       if (savedDensity === "d2" || savedDensity === "d3") density = savedDensity;
     } catch (_) {}
-    const root = document.documentElement;
-    root.dataset.theme = theme;
-    root.dataset.density = density;
-    const meta = document.querySelector('meta[name="color-scheme"]');
-    if (meta) meta.setAttribute("content", theme === "dark" || theme === "dark-paper" ? "dark" : "light");
+    const root = document.documentElement; root.dataset.theme = theme; root.dataset.density = density;
+    const meta = document.querySelector('meta[name="color-scheme"]'); if (meta) meta.setAttribute("content", theme === "dark" || theme === "dark-paper" ? "dark" : "light");
   })();
 
   const REGISTRY = new Map();
   let themeObserver = null;
-
-  function toNum(val, fallback) {
-    const n = Number(val);
-    return Number.isFinite(n) ? n : fallback;
-  }
-
-  function fmtMs(val) {
-    const n = toNum(val, 0);
-    if (Math.abs(n) >= 100) return String(Math.round(n));
-    if (Math.abs(n) >= 10) return String(Number(n.toFixed(1)));
-    return String(Number(n.toFixed(2)));
-  }
-
-  function fmtTooltipMs(val) {
-    const n = toNum(val, 0);
-    return n >= 1000 ? (n / 1000).toFixed(2) + " s (" + Math.round(n) + " ms)" : fmtMs(n) + " ms";
-  }
-
-  function fmtCompactSpike(val) {
-    const n = toNum(val, 0);
-    return n >= 1000 ? Number((n / 1000).toFixed(1)) + "s" : Math.round(n) + "ms";
-  }
+  const toNum = (val, fallback) => { const n = Number(val); return Number.isFinite(n) ? n : fallback; };
+  const fmtMs = (val) => { const n = toNum(val, 0); return Math.abs(n) >= 100 ? String(Math.round(n)) : (Math.abs(n) >= 10 ? String(Number(n.toFixed(1))) : String(Number(n.toFixed(2)))); };
+  const fmtTooltipMs = (val) => { const n = toNum(val, 0); return n >= 1000 ? (n / 1000).toFixed(2) + " s (" + Math.round(n) + " ms)" : fmtMs(n) + " ms"; };
+  const fmtCompactSpike = (val) => { const n = toNum(val, 0); return n >= 1000 ? Number((n / 1000).toFixed(1)) + "s" : Math.round(n) + "ms"; };
 
   function trimLabel(str, maxLen) {
-    const s = String(str || "");
-    if (s.length <= maxLen) return s;
-    const noParen = s.replace(/\s*\([^)]*\)\s*$/, "");
-    if (noParen.length >= 6 && noParen.length <= maxLen) return noParen;
+    const s = String(str || ""); if (s.length <= maxLen) return s;
+    const noParen = s.replace(/\s*\([^)]*\)\s*$/, ""); if (noParen.length >= 6 && noParen.length <= maxLen) return noParen;
     let cut = s.slice(0, Math.max(1, maxLen - 1)).replace(/\s+$/, "");
     if ((cut.match(/\(/g) || []).length > (cut.match(/\)/g) || []).length) cut = cut.replace(/\s*\([^()]*$/, "");
     if ((cut.match(/\[/g) || []).length > (cut.match(/\]/g) || []).length) cut = cut.replace(/\s*\[[^\[\]]*$/, "");
@@ -64,8 +37,7 @@
   const escHtml = (str) => String(str == null ? "" : str).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 
   function readThemeTokens() {
-    const cs = getComputedStyle(document.documentElement);
-    const pick = (name, fb) => cs.getPropertyValue(name).trim() || fb || "currentColor";
+    const cs = getComputedStyle(document.documentElement), pick = (name, fb) => cs.getPropertyValue(name).trim() || fb || "currentColor";
     return {
       textPrimary: pick("--text-primary"), textSecondary: pick("--text-secondary"), textMuted: pick("--text-muted"),
       bgSurface: pick("--bg-surface"), bgElevated: pick("--bg-elevated"), bgSubtle: pick("--bg-subtle"),
@@ -78,23 +50,17 @@
 
   function computeNiceMax(maxVal) {
     const raw = Math.max(1, toNum(maxVal, 10));
-    if (globalScope.QuietSvgLayout && typeof globalScope.QuietSvgLayout.niceScale125 === "function") {
-      return globalScope.QuietSvgLayout.niceScale125(0, raw * 1.12, { targetTicks: 5, includeZero: true });
-    }
+    if (globalScope.QuietSvgLayout && typeof globalScope.QuietSvgLayout.niceScale125 === "function") return globalScope.QuietSvgLayout.niceScale125(0, raw * 1.12, { targetTicks: 5, includeZero: true });
     const step = Math.pow(10, Math.floor(Math.log10(raw / 4)));
-    return { min: 0, max: Math.ceil((raw * 1.15) / step) * step, step: step };
+    return { min: 0, max: Math.ceil((raw * 1.15) / step) * step, step };
   }
 
   function computeGutterPx(labels, tok, maxPx) {
     const cap = maxPx || 168;
     if (globalScope.QuietSvgLayout && typeof globalScope.QuietSvgLayout.measureCategoryGutter === "function") {
-      const m = globalScope.QuietSvgLayout.measureCategoryGutter(labels, {
-        minPx: 76, maxPx: cap, maxChars: 24, maxLines: 1, fontFamily: tok.fontSans, fontSize: 11
-      });
-      return m.gutterPx;
+      return globalScope.QuietSvgLayout.measureCategoryGutter(labels, { minPx: 76, maxPx: cap, maxChars: 24, maxLines: 1, fontFamily: tok.fontSans, fontSize: 11 }).gutterPx;
     }
-    let maxLen = 0;
-    for (let i = 0; i < labels.length; i += 1) maxLen = Math.max(maxLen, String(labels[i] || "").length);
+    let maxLen = 0; for (let i = 0; i < labels.length; i += 1) maxLen = Math.max(maxLen, String(labels[i] || "").length);
     return Math.max(80, Math.min(cap, maxLen * 7 + 18));
   }
 
@@ -113,50 +79,24 @@
   }
 
   function attachResize(hostEl, chart) {
-    if (globalScope.QuietEChartsDefaults && typeof globalScope.QuietEChartsDefaults.observeChartResize === "function") {
-      return globalScope.QuietEChartsDefaults.observeChartResize(hostEl, chart);
-    }
-    let raf = 0;
-    const resizeNow = () => {
-      if (raf) return;
-      raf = globalScope.requestAnimationFrame(() => {
-        raf = 0;
-        if (hostEl.clientWidth > 0 && (!chart.isDisposed || !chart.isDisposed())) chart.resize();
-      });
-    };
-    let ro = null;
-    if (typeof globalScope.ResizeObserver === "function") {
-      ro = new globalScope.ResizeObserver(resizeNow);
-      ro.observe(hostEl);
-    } else {
-      globalScope.addEventListener("resize", resizeNow);
-    }
-    return () => {
-      if (raf) globalScope.cancelAnimationFrame(raf);
-      if (ro) ro.disconnect();
-      else globalScope.removeEventListener("resize", resizeNow);
-    };
+    if (globalScope.QuietEChartsDefaults && typeof globalScope.QuietEChartsDefaults.observeChartResize === "function") return globalScope.QuietEChartsDefaults.observeChartResize(hostEl, chart);
+    let raf = 0, ro = null;
+    const resizeNow = () => { if (raf) return; raf = globalScope.requestAnimationFrame(() => { raf = 0; if (hostEl.clientWidth > 0 && (!chart.isDisposed || !chart.isDisposed())) chart.resize(); }); };
+    if (typeof globalScope.ResizeObserver === "function") { ro = new globalScope.ResizeObserver(resizeNow); ro.observe(hostEl); }
+    else globalScope.addEventListener("resize", resizeNow);
+    return () => { if (raf) globalScope.cancelAnimationFrame(raf); if (ro) ro.disconnect(); else globalScope.removeEventListener("resize", resizeNow); };
   }
 
   function mountChart(hostEl, buildOptionFn, emptyMsg) {
     if (!hostEl) return null;
     disposeHost(hostEl);
-    const showEmpty = (msg) => {
-      const p = document.createElement("p");
-      p.className = "chart-empty";
-      p.textContent = msg;
-      hostEl.replaceChildren(p);
-      return null;
-    };
-    const tok = readThemeTokens();
-    const opt = buildOptionFn(tok, hostEl);
+    const showEmpty = (msg) => { const p = document.createElement("p"); p.className = "chart-empty"; p.textContent = msg; hostEl.replaceChildren(p); return null; };
+    const opt = buildOptionFn(readThemeTokens(), hostEl);
     if (!opt) { hostEl.removeAttribute("data-rows"); return showEmpty(emptyMsg || "No chart data available."); }
     if (!globalScope.echarts || typeof globalScope.echarts.init !== "function") return showEmpty("Chart engine unavailable.");
     hostEl.replaceChildren();
-    const chart = globalScope.echarts.init(hostEl, null, { renderer: "svg" });
-    chart.setOption(opt, true);
-    const stopResize = attachResize(hostEl, chart);
-    REGISTRY.set(hostEl, { chart, buildOption: buildOptionFn, stopResize });
+    const chart = globalScope.echarts.init(hostEl, null, { renderer: "svg" }); chart.setOption(opt, true);
+    REGISTRY.set(hostEl, { chart, buildOption: buildOptionFn, stopResize: attachResize(hostEl, chart) });
     return chart;
   }
 
@@ -164,90 +104,127 @@
     return { backgroundColor: tok.bgElevated, borderColor: tok.borderStrong, borderWidth: 1, textStyle: { color: tok.textPrimary, fontFamily: tok.fontSans, fontSize: 12 }, confine: true };
   }
 
+  function parseHopNum(item, fallbackIdx) {
+    if (item && item.hop != null && Number.isFinite(Number(item.hop))) return Number(item.hop);
+    const lbl = String((item && (item.label || item.name)) || "");
+    const m = lbl.match(/^(?:\[|hop\s*#?|#)?(\d+)\b/i) || lbl.match(/\bhop\s*#?(\d+)\b/i);
+    return m ? Number(m[1]) : (fallbackIdx != null ? fallbackIdx + 1 : null);
+  }
+
   function normalizeWhiskers(rawSeries) {
     const list = Array.isArray(rawSeries) ? rawSeries : (rawSeries && (rawSeries.series || rawSeries.hops || rawSeries.stages)) || [];
-    const rows = [];
+    const raw = [];
     for (let i = 0; i < list.length; i += 1) {
-      const item = list[i];
-      if (!item || typeof item !== "object") continue;
+      const item = list[i]; if (!item || typeof item !== "object") continue;
       const min = toNum(item.minMs !== undefined ? item.minMs : item.min, 0);
       const avg = toNum(item.avgMs !== undefined ? item.avgMs : (item.avg !== undefined ? item.avg : item.rttMs), min);
       const max = toNum(item.maxMs !== undefined ? item.maxMs : item.max, avg);
-      const lo = Math.max(0, Math.min(min, avg, max));
-      const hi = Math.max(lo, min, avg, max);
-      rows.push({
+      const lo = Math.max(0, Math.min(min, avg, max)), hi = Math.max(lo, min, avg, max);
+      raw.push({
         label: String(item.label || item.name || item.hop || ("Hop " + (i + 1))),
-        min: lo,
-        avg: Math.min(hi, Math.max(lo, avg)),
-        max: hi,
+        hopNum: parseHopNum(item, null), segment: String(item.segment || "").trim(), hostname: String(item.hostname || "").trim(),
+        silent: Boolean(item.silent), min: lo, avg: Math.min(hi, Math.max(lo, avg)), max: hi,
         lossPct: Math.min(100, Math.max(0, toNum(item.lossPct !== undefined ? item.lossPct : item.loss, 0)))
       });
     }
-    return rows;
+    let lastResp = -1;
+    for (let i = 0; i < raw.length; i += 1) { if (!raw[i].silent && !(raw[i].lossPct >= 100 && raw[i].max === 0)) lastResp = i; }
+    const isSilent = (r, idx) => r.silent || (idx < lastResp && r.lossPct >= 100 && r.max === 0 && /\(\*\)|:\s*\*\s*$|^\s*\*\s*$/.test(r.label));
+    const out = [];
+    let prevAvg = null;
+    for (let i = 0; i < raw.length; i += 1) {
+      if (isSilent(raw[i], i)) {
+        let j = i;
+        while (j + 1 < raw.length && isSilent(raw[j + 1], j + 1)) j += 1;
+        const cnt = j - i + 1, h1 = raw[i].hopNum ?? (i + 1), h2 = raw[j].hopNum ?? (j + 1);
+        const hopTag = cnt === 1 ? "Hop " + h1 : "Hops " + h1 + "–" + h2;
+        out.push({
+          label: hopTag + " · " + (cnt === 1 ? "1 silent transit router" : cnt + " silent transit routers (traffic flowing)"),
+          axisLabel: hopTag, min: 0, avg: 0, max: 0, lossPct: 100, isSilent: true, silentCount: cnt
+        });
+        i = j; continue;
+      }
+      const r = Object.assign({}, raw[i], { isSilent: false, deltaMs: null });
+      const lossOnly = r.lossPct >= 100 || (r.max === 0 && r.lossPct > 0);
+      if (!lossOnly) { if (prevAvg !== null) r.deltaMs = r.avg - prevAvg; prevAvg = r.avg; }
+      out.push(r);
+    }
+    return out;
   }
 
   function horizontalChartBase(tok, hostEl, cats, maxVal, xName, rightPad, bottomPad, tipFmt, series) {
-    const narrow = ((hostEl && hostEl.clientWidth) || 640) < 460;
-    const scale = computeNiceMax(maxVal);
+    const narrow = ((hostEl && hostEl.clientWidth) || 640) < 460, scale = computeNiceMax(maxVal);
     return {
-      animation: false, backgroundColor: "transparent",
-      textStyle: { fontFamily: tok.fontSans, color: tok.textPrimary },
+      animation: false, backgroundColor: "transparent", textStyle: { fontFamily: tok.fontSans, color: tok.textPrimary },
       tooltip: Object.assign(tooltipStyle(tok), { trigger: "axis", axisPointer: { type: "shadow" }, formatter: tipFmt }),
-      grid: { left: computeGutterPx(cats, tok, narrow ? 112 : 168), right: narrow ? Math.min(rightPad, 72) : rightPad, top: 14, bottom: bottomPad, containLabel: false },
+      grid: { left: computeGutterPx(cats, tok, narrow ? 116 : 172), right: narrow ? Math.min(rightPad, 88) : rightPad, top: 14, bottom: bottomPad, containLabel: false },
       xAxis: {
-        type: "value", name: xName || "ms", nameLocation: "end", nameGap: 6, min: 0, max: scale.max,
-        splitNumber: narrow ? 3 : 5,
+        type: "value", name: xName || "ms", nameLocation: "end", nameGap: 6, min: 0, max: scale.max, splitNumber: narrow ? 3 : 5,
         nameTextStyle: { color: tok.textMuted, fontSize: 11, fontFamily: tok.fontMono, align: "left", verticalAlign: "top", padding: [5, 0, 0, 2] },
-        axisLine: { lineStyle: { color: tok.borderStrong } },
-        axisLabel: { color: tok.textSecondary, fontSize: 11, fontFamily: tok.fontMono, hideOverlap: true },
+        axisLine: { lineStyle: { color: tok.borderStrong } }, axisLabel: { color: tok.textSecondary, fontSize: 11, fontFamily: tok.fontMono, hideOverlap: true },
         splitLine: { lineStyle: { color: tok.borderHairline, type: "dashed" } }
       },
-      yAxis: {
-        type: "category", inverse: true, data: cats,
-        axisLine: { lineStyle: { color: tok.borderStrong } },
-        axisTick: { show: false },
-        axisLabel: { color: tok.textPrimary, fontSize: 11 }
-      },
+      yAxis: { type: "category", inverse: true, data: cats, axisLine: { lineStyle: { color: tok.borderStrong } }, axisTick: { show: false }, axisLabel: { color: tok.textPrimary, fontSize: 11 } },
       series: series
     };
   }
 
   function renderWhiskers(hostEl, rawSeries) {
     const rows = normalizeWhiskers(rawSeries);
-    const isLossOnly = (r) => r.lossPct >= 100 || (r.max === 0 && r.lossPct > 0);
+    const isLossOnly = (r) => !r.isSilent && (r.lossPct >= 100 || (r.max === 0 && r.lossPct > 0));
     if (hostEl) hostEl.dataset.rows = rows.length > 6 ? "many" : "few";
     return mountChart(hostEl, (tok, el) => {
       if (!rows.length) return null;
-      const cats = rows.map((r) => trimLabel(r.label, (el.clientWidth || 640) < 460 ? 18 : 26));
+      const narrow = (el.clientWidth || 640) < 460, cats = rows.map((r) => trimLabel(r.axisLabel || r.label, narrow ? 18 : 26));
       const maxVal = Math.max.apply(null, rows.map((r) => r.max).concat([1]));
-      const customData = rows.map((r, idx) => [idx, r.min, r.max, r.avg, r.lossPct]);
-      const avgData = rows.map((r, idx) => (isLossOnly(r) ? null : {
-        value: [r.avg, idx],
-        itemStyle: { color: r.lossPct >= 20 ? tok.statusDanger : (r.lossPct > 0 ? tok.statusWarn : tok.chart2), borderColor: tok.bgSurface, borderWidth: 1.5 }
+      const fmtVal = (r) => {
+        if (r.isSilent) return r.silentCount === 1 ? "Silent transit (flowing)" : r.silentCount + " silent (flowing)";
+        if (r.lossPct >= 100) return "100% loss";
+        if (r.max === 0 && r.lossPct > 0) return fmtMs(r.lossPct) + "% loss";
+        const dTxt = r.deltaMs != null && !narrow ? " (" + (r.deltaMs >= 0 ? "+" : "") + fmtMs(r.deltaMs) + ")" : "";
+        return fmtMs(r.avg) + " ms" + dTxt + (r.lossPct > 0 ? " [" + fmtMs(r.lossPct) + "%]" : "");
+      };
+      const maxLblLen = rows.reduce((m, r) => Math.max(m, fmtVal(r).length), 0);
+      const rightPad = narrow ? Math.min(118, Math.max(76, maxLblLen * 6)) : Math.min(180, Math.max(96, maxLblLen * 7 + 18));
+      const silentStub = maxVal * 0.08;
+      const customData = rows.map((r, idx) => [idx, r.min, r.max, r.avg, r.lossPct, r.isSilent ? 1 : 0]);
+      const avgData = rows.map((r, idx) => (r.isSilent || isLossOnly(r) ? null : {
+        value: [r.avg, idx], itemStyle: { color: r.lossPct >= 20 ? tok.statusDanger : (r.lossPct > 0 ? tok.statusWarn : tok.chart2), borderColor: tok.bgSurface, borderWidth: 1.5 }
       }));
       const labelData = rows.map((r, idx) => {
         const lossOnly = isLossOnly(r);
+        if (r.isSilent) return { value: [silentStub, idx], symbol: "circle", symbolSize: 1, itemStyle: { color: "transparent", opacity: 1 }, label: { color: tok.textMuted } };
         return {
           value: [lossOnly ? 0 : r.max, idx], symbol: lossOnly ? "diamond" : "circle", symbolSize: lossOnly ? 8 : 1,
           itemStyle: lossOnly ? { color: tok.statusDanger, borderColor: tok.bgSurface, borderWidth: 1.5, opacity: 1 } : { color: "transparent", borderWidth: 0, opacity: 1 },
           label: lossOnly ? { color: tok.statusDanger } : undefined
         };
       });
-      const opt = horizontalChartBase(tok, el, cats, maxVal, "ms", 92, 52, (params) => {
-        const first = Array.isArray(params) ? params[0] : params;
-        const r = rows[first ? first.dataIndex : 0];
+      const opt = horizontalChartBase(tok, el, cats, maxVal, "ms", rightPad, 52, (params) => {
+        const first = Array.isArray(params) ? params[0] : params, r = rows[first ? first.dataIndex : 0];
         if (!r) return "";
         const lbl = "<strong>" + escHtml(r.label) + "</strong>";
-        if (isLossOnly(r)) return lbl + "<br/>Packet Loss: " + escHtml(fmtMs(r.lossPct)) + "%";
-        return [lbl, "Min: " + escHtml(fmtMs(r.min)) + " ms", "Avg: " + escHtml(fmtMs(r.avg)) + " ms", "Max: " + escHtml(fmtMs(r.max)) + " ms", "Loss: " + escHtml(fmtMs(r.lossPct)) + "%"].join("<br/>");
+        if (r.isSilent) return [lbl, "Status: Silent transit (traffic flowing)", "Transit routers frequently suppress ICMP Time-Exceeded replies under CoPP rate-limiting while forwarding packets normally."].join("<br/>");
+        const meta = [];
+        if (r.segment) meta.push("Segment: " + escHtml(r.segment));
+        if (r.hostname) meta.push("Host: " + escHtml(r.hostname));
+        if (isLossOnly(r)) return [lbl].concat(meta, ["Packet Loss: " + escHtml(fmtMs(r.lossPct)) + "%"]).join("<br/>");
+        const deltaLine = r.deltaMs != null ? ["Hop Delta: " + escHtml((r.deltaMs >= 0 ? "+" : "") + fmtMs(r.deltaMs)) + " ms"] : [];
+        return [lbl].concat(meta, ["Min / Avg / Max: " + escHtml(fmtMs(r.min) + " / " + fmtMs(r.avg) + " / " + fmtMs(r.max)) + " ms"], deltaLine, ["Loss: " + escHtml(fmtMs(r.lossPct)) + "%"]).join("<br/>");
       }, [
         {
           name: "Min–Max Range", type: "custom", z: 2, itemStyle: { color: tok.accentPrimary }, data: customData,
           renderItem: (params, api) => {
-            const idx = api.value(0), lo = api.value(1), hi = api.value(2), loss = api.value(4);
+            const idx = api.value(0), lo = api.value(1), hi = api.value(2), loss = api.value(4), silent = api.value(5) === 1;
+            if (silent) {
+              const p0 = api.coord([0, idx]), p1 = api.coord([silentStub, idx]);
+              return { type: "group", children: [
+                { type: "line", shape: { x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1] }, style: { stroke: tok.textMuted, lineWidth: 1.5, lineDash: [3, 3] } },
+                { type: "circle", shape: { cx: p0[0], cy: p0[1], r: 3.5 }, style: { fill: tok.bgSurface, stroke: tok.textMuted, lineWidth: 1.5 } }
+              ] };
+            }
             if (loss >= 100 || (hi === 0 && loss > 0)) return null;
-            const pLo = api.coord([lo, idx]), pHi = api.coord([hi, idx]);
-            const stroke = loss >= 20 ? tok.statusDanger : (loss > 0 ? tok.statusWarn : tok.accentPrimary);
+            const pLo = api.coord([lo, idx]), pHi = api.coord([hi, idx]), stroke = loss >= 20 ? tok.statusDanger : (loss > 0 ? tok.statusWarn : tok.accentPrimary);
             return { type: "group", children: [
               { type: "line", shape: { x1: pLo[0], y1: pLo[1], x2: pHi[0], y2: pHi[1] }, style: { stroke, lineWidth: 2.2 } },
               { type: "line", shape: { x1: pLo[0], y1: pLo[1] - 6, x2: pLo[0], y2: pLo[1] + 6 }, style: { stroke, lineWidth: 2 } },
@@ -258,17 +235,7 @@
         { name: "Average RTT", type: "scatter", z: 4, symbolSize: 9, itemStyle: { color: tok.chart2, borderColor: tok.bgSurface, borderWidth: 1.5 }, data: avgData },
         {
           name: "Value Labels", type: "scatter", z: 5, silent: true, legendHoverLink: false, tooltip: { show: false }, data: labelData,
-          label: {
-            show: true, position: "right", distance: 10, fontFamily: tok.fontMono, fontSize: 11, color: tok.textSecondary,
-            textBorderColor: tok.bgElevated, textBorderWidth: 4,
-            formatter: (p) => {
-              const r = rows[p.dataIndex];
-              if (!r) return "";
-              if (r.lossPct >= 100) return "100% loss";
-              if (r.max === 0 && r.lossPct > 0) return fmtMs(r.lossPct) + "% loss";
-              return r.lossPct > 0 ? fmtMs(r.avg) + " ms (" + fmtMs(r.lossPct) + "%)" : fmtMs(r.avg) + " ms";
-            }
-          }
+          label: { show: true, position: "right", distance: 10, fontFamily: tok.fontMono, fontSize: 11, color: tok.textSecondary, textBorderColor: tok.bgElevated, textBorderWidth: 4, formatter: (p) => (rows[p.dataIndex] ? fmtVal(rows[p.dataIndex]) : "") }
         }
       ]);
       opt.legend = { bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, textStyle: { color: tok.textSecondary, fontSize: 11 }, data: [{ name: "Min–Max Range", icon: "rect", itemStyle: { color: tok.accentPrimary } }, { name: "Average RTT", icon: "circle", itemStyle: { color: tok.chart2, borderColor: tok.bgSurface, borderWidth: 1.5 } }] };

@@ -142,12 +142,30 @@ func TestStaticAssetsAndDemoSnapshot(t *testing.T) {
 	t.Parallel()
 	deps := newTestStudio(t, "")
 
-	for _, p := range []string{"/", "/index.html", "/tokens.css", "/studio.css", "/charts.js", "/studio_tool_views.js", "/studio_results.js", "/studio_destinations.js", "/studio.js", "/demo_snapshots/demo_snapshot.json"} {
+	for _, p := range []string{"/", "/index.html", "/tokens.css", "/studio.css", "/studio_overlays.css", "/charts.js", "/studio_tool_views.js", "/studio_results.js", "/studio_destinations.js", "/studio_progress.js", "/studio.js", "/demo_snapshots/demo_snapshot.json"} {
 		rr := doReq(t, deps.handler, http.MethodGet, p, "")
 		assert.Equal(t, http.StatusOK, rr.Code, "path=%s", p)
 		assert.Equal(t, "nosniff", rr.Header().Get("X-Content-Type-Options"))
 		if p == "/" || p == "/index.html" {
 			assert.Equal(t, "no-store", rr.Header().Get("Cache-Control"))
+			html := rr.Body.String()
+			for _, id := range []string{
+				`id="appearanceBtn"`,
+				`id="appearancePopover"`,
+				`id="runProgressCard"`,
+				`id="runCancelBtn"`,
+				`id="drawerProgressCard"`,
+				`id="drawerCancelBtn"`,
+			} {
+				assert.Contains(t, html, id, "path=%s", p)
+			}
+			assert.NotContains(t, html, "themeSelect", "path=%s", p)
+		}
+		switch p {
+		case "/studio_overlays.css":
+			assert.Contains(t, rr.Header().Get("Content-Type"), "text/css")
+		case "/studio_progress.js":
+			assert.Contains(t, rr.Header().Get("Content-Type"), "javascript")
 		}
 	}
 

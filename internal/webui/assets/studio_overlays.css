@@ -1,0 +1,179 @@
+@layer reset, tokens, shell, archetypes, evidence, views, utilities;
+
+/* Quiet UI — Appearance Popover, Native Progress Spinner & Muted Transit Rows */
+@property --arc-start { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+@property --arc-end { syntax: "<angle>"; inherits: false; initial-value: 158deg; }
+@property --progress-dash-animation { syntax: "*"; inherits: false; initial-value: , progress-dash 2.4s ease-in-out infinite; }
+
+@layer shell {
+  .appearance-trigger { position: relative; }
+  .appearance-icon, .appearance-chevron, .appearance-check { flex-shrink: 0; pointer-events: none; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .appearance-chevron { transition: transform 160ms ease-out; }
+    .appearance-trigger[aria-expanded="true"] .appearance-chevron { transform: rotate(180deg); }
+  }
+
+  .appearance-popover {
+    inline-size: min(15.5rem, calc(100dvw - 1rem));
+    max-inline-size: calc(100dvw - 1rem);
+    max-block-size: min(26rem, calc(100dvh - 4rem));
+    overflow-y: auto; overscroll-behavior: contain;
+    padding: 0.6rem;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-card);
+    background: var(--bg-surface); color: var(--text-primary);
+    box-shadow: var(--shadow-elevated); z-index: 80;
+  }
+  @supports not selector(:popover-open) {
+    .appearance-popover[popover]:not(.\:popover-open):not(.is-open) { display: none; }
+  }
+  .appearance-popover:is(:popover-open, .\:popover-open, .is-open) {
+    display: flex; flex-direction: column; gap: 0.55rem;
+  }
+  @supports (position-area: block-end) {
+    .appearance-trigger { anchor-name: --appearance-trigger; }
+    .appearance-popover {
+      position-anchor: --appearance-trigger;
+      inset: auto; margin: 0; margin-block-start: 0.35rem;
+      position-area: block-end span-inline-start;
+      position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    }
+  }
+  @supports not (position-area: block-end) {
+    .appearance-popover { position: fixed; inset: auto; margin: 0; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .appearance-popover { transition: opacity 140ms ease-out, transform 140ms ease-out; }
+    @starting-style {
+      .appearance-popover:is(:popover-open, .\:popover-open, .is-open) { opacity: 0; transform: translateY(-4px); }
+    }
+  }
+
+  .appearance-section { display: flex; flex-direction: column; gap: 0.35rem; min-inline-size: 0; }
+  .appearance-section + .appearance-section { padding-block-start: 0.55rem; border-block-start: 1px solid var(--border-hairline); }
+  .appearance-section-label {
+    font-size: var(--ts-xs); font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text-muted); padding-inline: 0.25rem;
+  }
+  .appearance-theme-list { display: flex; flex-direction: column; gap: 0.18rem; min-inline-size: 0; }
+  .appearance-theme-btn {
+    display: flex; align-items: center; gap: 0.5rem; inline-size: 100%; min-block-size: 34px;
+    padding: 0.32rem 0.5rem; border: 1px solid transparent; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-primary); font-size: var(--ts-sm); font-weight: 500; text-align: start;
+  }
+  .appearance-theme-btn:hover { background: var(--bg-elevated); }
+  .appearance-theme-btn[aria-pressed="true"] {
+    background: var(--bg-subtle); border-color: var(--border-strong); font-weight: 700;
+  }
+  .appearance-theme-name { flex: 1 1 auto; min-inline-size: 0; }
+  .appearance-check { color: var(--accent-primary); opacity: 0; }
+  .appearance-theme-btn[aria-pressed="true"] .appearance-check { opacity: 1; }
+  .va-swatch-dot {
+    inline-size: 14px; block-size: 14px; border-radius: var(--radius-pill);
+    border: 1.5px solid var(--border-strong); flex-shrink: 0;
+  }
+  .va-swatch-dot[data-swatch="white"] { background: var(--swatch-white); border-color: var(--swatch-white-border); box-shadow: inset 0 0 0 2px var(--swatch-white-ring); }
+  .va-swatch-dot[data-swatch="paper"] { background: var(--swatch-paper); border-color: var(--swatch-paper-border); box-shadow: inset 0 0 0 2px var(--swatch-paper-ring); }
+  .va-swatch-dot[data-swatch="dark-paper"] { background: var(--swatch-dark-paper); border-color: var(--swatch-dark-paper-border); box-shadow: inset 0 0 0 2px var(--swatch-dark-paper-ring); }
+  .va-swatch-dot[data-swatch="dark"] { background: var(--swatch-dark); border-color: var(--swatch-dark-border); box-shadow: inset 0 0 0 2px var(--swatch-dark-ring); }
+  .appearance-density-group { inline-size: 100%; }
+  .appearance-density-group .va-seg-btn { flex: 1 1 0; }
+
+  .va-pill[data-variant="status"][data-state="muted"] {
+    background: var(--bg-subtle); color: var(--text-muted);
+    border: 1px solid var(--border-hairline); border-inline-start: 2.5px solid var(--border-strong);
+    font-weight: 600;
+  }
+  .va-pill[data-variant="status"][data-state="muted"]::before {
+    content: ""; inline-size: 6px; block-size: 6px; border-radius: var(--radius-pill);
+    background: var(--text-muted); flex-shrink: 0;
+  }
+
+  @media (forced-colors: active) {
+    .appearance-popover { border-color: CanvasText; }
+    .appearance-theme-btn[aria-pressed="true"] { background: Highlight; color: HighlightText; border-color: Highlight; }
+    .appearance-theme-btn[aria-pressed="true"] .appearance-check { color: HighlightText; }
+    .va-swatch-dot { forced-color-adjust: none; }
+    .va-pill[data-variant="status"][data-state="muted"] {
+      border-color: ButtonBorder; border-inline-start-color: GrayText; color: GrayText;
+    }
+  }
+}
+
+@layer views {
+  progress.va-spinner:indeterminate::-webkit-progress-bar { display: none; background: none; }
+  progress.va-spinner:indeterminate::-webkit-progress-value { display: none; background: none; }
+  progress.va-spinner:indeterminate::-moz-progress-bar { display: none; background: none; }
+  progress.va-spinner:indeterminate::slider-fill { display: none; background: none; }
+
+  progress.va-spinner:indeterminate {
+    --_from: calc(90deg + var(--arc-start, 0deg));
+    --_to: calc(90deg + var(--arc-end, 158deg));
+    --size: 20px;
+    --thickness: 2.5px;
+    --spinner-color: var(--accent-primary);
+    --track-color: var(--border-hairline);
+    --spinner-duration: 1.2s;
+    --_used-spinner-duration: var(--spinner-duration);
+
+    position: relative; display: inline-block; flex: 0 0 auto;
+    inline-size: var(--size); block-size: var(--size);
+    border: 0; border-radius: var(--radius-pill); appearance: none;
+    background: conic-gradient(
+      from var(--_from),
+      var(--spinner-color) calc(var(--_to) - var(--_from)),
+      transparent 0
+    ) var(--track-color);
+    animation: progress-spin var(--_used-spinner-duration) linear infinite var(--progress-dash-animation, );
+  }
+  @supports (background-clip: border-area) {
+    progress.va-spinner:indeterminate {
+      background-clip: border-area; border: var(--thickness) solid transparent; background-origin: border-box;
+    }
+  }
+  @supports not (background-clip: border-area) {
+    progress.va-spinner:indeterminate {
+      --clip-boundary: calc(100% - var(--thickness));
+      mask-image: radial-gradient(farthest-side, transparent var(--clip-boundary), black var(--clip-boundary));
+    }
+  }
+  @media (forced-colors: active) {
+    progress.va-spinner:indeterminate {
+      forced-color-adjust: none; --spinner-color: CanvasText; --track-color: Canvas;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    progress.va-spinner:indeterminate {
+      --_used-spinner-duration: 6s; --progress-dash-animation: ; --arc-start: 0deg; --arc-end: 158deg;
+    }
+  }
+  @keyframes progress-spin {
+    to { rotate: 1turn; }
+  }
+  @keyframes progress-dash {
+    from { --arc-start: 0deg; --arc-end: 3deg; }
+    50% { --arc-start: 100deg; --arc-end: 358deg; }
+    to { --arc-start: 360deg; --arc-end: 363deg; }
+  }
+
+  .run-progress-card {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 0.55rem 0.75rem; padding: 0.65rem 0.8rem;
+    border: 1px solid var(--border-strong); border-inline-start: 3px solid var(--accent-primary);
+    border-radius: var(--radius-inner); background: var(--bg-elevated); min-inline-size: 0;
+  }
+  .run-progress-main { display: flex; align-items: center; gap: 0.65rem; min-inline-size: 0; flex: 1 1 12rem; }
+  .run-progress-copy { display: flex; flex-direction: column; gap: 0.1rem; min-inline-size: 0; }
+  .run-progress-title { font-size: var(--ts-sm); font-weight: 700; color: var(--text-primary); }
+  .run-progress-hint { overflow-wrap: anywhere; }
+  .run-progress-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; flex: 0 0 auto; }
+
+  .hop-silent-row { background: color-mix(in oklab, var(--bg-subtle) 55%, transparent); color: var(--text-muted); }
+  .hop-silent-row td { color: var(--text-muted); }
+}
+
+@layer utilities {
+  @media print {
+    .appearance-popover, .run-progress-card { display: none; }
+  }
+}

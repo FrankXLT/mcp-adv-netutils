@@ -48,10 +48,17 @@ type RecipeResult struct {
 	HealthStates []string          `json:"health_states,omitempty"`
 }
 
-// RenderDigestParams specifies job IDs or history limit for rendering a consolidated run digest.
+// RenderDigestParams specifies job IDs or time-window/status filters for rendering a consolidated run digest.
 type RenderDigestParams struct {
-	JobIDs []string `json:"job_ids,omitempty"`
-	Limit  int      `json:"limit,omitempty"`
+	JobIDs        []string `json:"job_ids,omitempty"`
+	Window        string   `json:"window,omitempty"`
+	Since         string   `json:"since,omitempty"`
+	Until         string   `json:"until,omitempty"`
+	Target        string   `json:"target,omitempty"`
+	ToolName      string   `json:"tool_name,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	IncidentsOnly bool     `json:"incidents_only,omitempty"`
+	Limit         int      `json:"limit,omitempty"`
 }
 
 // DigestJobEntry summarizes a single stored job within a consolidated run digest.
@@ -67,15 +74,21 @@ type DigestJobEntry struct {
 	IsIncident bool   `json:"is_incident"`
 }
 
-// DigestData contains aggregate counts and severity-sorted job entries for ExecuteRenderRunDigest.
+// DigestData contains aggregate counts, window summary, and severity-sorted job entries for ExecuteRenderRunDigest.
 type DigestData struct {
-	TotalJobs     int              `json:"total_jobs"`
-	OKCount       int              `json:"ok_count"`
-	WarnCount     int              `json:"warn_count"`
-	FailCount     int              `json:"fail_count"`
-	IncidentCount int              `json:"incident_count"`
-	Jobs          []DigestJobEntry `json:"jobs"`
-	Timestamp     string           `json:"timestamp"`
+	TotalJobs     int                     `json:"total_jobs"`
+	OKCount       int                     `json:"ok_count"`
+	WarnCount     int                     `json:"warn_count"`
+	FailCount     int                     `json:"fail_count"`
+	IncidentCount int                     `json:"incident_count"`
+	Window        string                  `json:"window,omitempty"`
+	Since         string                  `json:"since,omitempty"`
+	Until         string                  `json:"until,omitempty"`
+	WindowSummary *store.JobWindowSummary `json:"window_summary,omitempty"`
+	Truncated     bool                    `json:"truncated,omitempty"`
+	OmittedJobs   int                     `json:"omitted_jobs,omitempty"`
+	Jobs          []DigestJobEntry        `json:"jobs"`
+	Timestamp     string                  `json:"timestamp"`
 }
 
 // DiffPingTCPCheck records TCP SYN-ACK/RST reachability for a specific port.
@@ -127,7 +140,7 @@ const (
 	// StatusINFO indicates informational or unclassified items.
 	StatusINFO = "INFO"
 
-	defaultDigestLimit = 20
+	defaultDigestLimit = 25
 	maxDigestLimit     = 100
 	procNetRoutePath   = "/proc/net/route"
 	diffTagAdded       = "[+] ADDED"
@@ -135,7 +148,7 @@ const (
 	diffTagChanged     = "[~] CHANGED"
 )
 
-// ExecuteRenderRunDigest loads stored JobRecords by IDs or recent history and builds a consolidated ReportCard.
+// ExecuteRenderRunDigest loads stored JobRecords by IDs or time-window/status filters and builds a consolidated ReportCard.
 func ExecuteRenderRunDigest(ctx context.Context, deps Dependencies, params RenderDigestParams) (*RecipeResult, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
@@ -144,110 +157,37 @@ func ExecuteRenderRunDigest(ctx context.Context, deps Dependencies, params Rende
 		return nil, errors.New("job store is required for render_run_digest")
 	}
 
-	started := time.Now()
-	jobs, err := loadDigestJobs(ctx, deps.Store, params.JobIDs, params.Limit)
+	started := time.Now().UTC()
+	parsed, err := parseDigestWindowAndBounds(params, started)
+	if err != nil {
+		return nil, err
+	}
+	jobs, winSummary, err := loadDigestJobsAndSummary(ctx, deps.Store, parsed)
 	if err != nil {
 		return nil, err
 	}
 
-	entries, rows, spark, health, counts := buildDigestEntries(jobs)
-	overall := StatusOK
-	if len(health) > 0 {
-		overall = worstStatus(health...)
-	}
-
-	summary := fmt.Sprintf("Consolidated %d job(s): %d OK, %d WARN, %d FAIL (%d incident(s))",
-		len(entries), counts.ok, counts.warn, counts.fail, counts.incidents)
-	if len(entries) == 0 {
-		summary = "No stored jobs matched digest filter"
-	}
-
-	data := DigestData{
-		TotalJobs: len(entries), OKCount: counts.ok, WarnCount: counts.warn,
-		FailCount: counts.fail, IncidentCount: counts.incidents,
-		Jobs: entries, Timestamp: time.Now().UTC().Format(time.RFC3339),
-	}
-	metrics := []ascii.MetricKV{
-		{Label: "Total Jobs", Value: strconv.Itoa(len(entries))},
-		{Label: "OK / WARN / FAIL", Value: fmt.Sprintf("%d / %d / %d", counts.ok, counts.warn, counts.fail)},
-		{Label: "Incidents", Value: strconv.Itoa(counts.incidents)},
-	}
-	return makeRecipeResult(&cardSpec{
-		ToolName: "render_run_digest", Title: "DIAGNOSTIC RUN DIGEST", Subtitle: "Stored Job Summary",
-		Status: overall, Summary: summary, DurationMS: time.Since(started).Milliseconds(),
-		Metrics: metrics, Headers: []string{"Job ID", "Tool", "Target", "Summary", "Dur"},
-		Rows: ascii.SortRowsBySeverity(rows), SparkValues: spark, HealthStates: health, RawData: data,
-	}), nil
-}
-
-func loadDigestJobs(ctx context.Context, st *store.JobStore, jobIDs []string, limit int) ([]store.JobRecord, error) {
-	if len(jobIDs) > 0 {
-		jobs := make([]store.JobRecord, 0, len(jobIDs))
-		for _, rawID := range jobIDs {
-			id := strings.TrimSpace(rawID)
-			if id == "" {
-				continue
-			}
-			rec, err := st.GetJob(ctx, id)
-			if err != nil {
-				return nil, fmt.Errorf("load job %q: %w", id, err)
-			}
-			jobs = append(jobs, *rec)
-		}
-		return jobs, nil
-	}
-	effLimit := limit
-	if effLimit <= 0 {
-		effLimit = defaultDigestLimit
-	}
-	if effLimit > maxDigestLimit {
-		effLimit = maxDigestLimit
-	}
-	jobs, err := st.ListJobs(ctx, store.JobFilter{Limit: effLimit})
-	if err != nil {
-		return nil, fmt.Errorf("list jobs for digest: %w", err)
-	}
-	return jobs, nil
-}
-
-func buildDigestEntries(jobs []store.JobRecord) ([]DigestJobEntry, []ascii.TableRow, []float64, []string, digestCounts) {
-	entries := make([]DigestJobEntry, 0, len(jobs))
-	for i := range jobs {
-		j := &jobs[i]
-		entries = append(entries, DigestJobEntry{
-			JobID: j.JobID, ToolName: j.ToolName, Target: j.Target, Source: j.Source,
-			Status: normalizeRecipeStatus(j.Status), Summary: j.Summary,
-			DurationMS: j.DurationMS, CreatedAt: j.CreatedAt, IsIncident: j.IsIncident,
-		})
-	}
-	slices.SortStableFunc(entries, func(a, b DigestJobEntry) int {
-		return statusSeverityRank(a.Status) - statusSeverityRank(b.Status)
-	})
-	rows := make([]ascii.TableRow, 0, len(entries))
-	spark := make([]float64, 0, len(entries))
-	health := make([]string, 0, len(entries))
-	var counts digestCounts
-	for i := range entries {
-		e := &entries[i]
-		switch e.Status {
-		case StatusFAIL:
-			counts.fail++
-		case StatusWARN:
-			counts.warn++
-		default:
-			counts.ok++
-		}
-		if e.IsIncident {
-			counts.incidents++
-		}
-		health = append(health, e.Status)
-		spark = append(spark, float64(e.DurationMS))
+	data := buildDigestData(jobs, winSummary, parsed)
+	metrics, notes, summary, overall := buildDigestCardDecorations(data)
+	rows := make([]ascii.TableRow, 0, len(data.Jobs))
+	spark := make([]float64, 0, len(data.Jobs))
+	health := make([]string, 0, len(data.Jobs))
+	for i := range data.Jobs {
+		e := &data.Jobs[i]
+		health, spark = append(health, e.Status), append(spark, float64(e.DurationMS))
 		rows = append(rows, ascii.TableRow{
 			Status: e.Status,
 			Cells:  []string{e.JobID, e.ToolName, e.Target, e.Summary, strconv.FormatInt(e.DurationMS, 10) + "ms"},
 		})
 	}
-	return entries, rows, spark, health, counts
+	return makeRecipeResult(&cardSpec{
+		ToolName: "render_run_digest", Title: "DIAGNOSTIC RUN DIGEST", Subtitle: "Stored Job Summary",
+		Target: firstNonEmpty(parsed.target, parsed.window, "recent"), Status: overall,
+		Summary: summary, DurationMS: time.Since(started).Milliseconds(), Metrics: metrics,
+		Headers: []string{"Job ID", "Tool", "Target", "Summary", "Dur"},
+		Rows:    ascii.SortRowsBySeverity(rows), SparkValues: spark, HealthStates: health,
+		Notes: notes, RawData: data,
+	}), nil
 }
 
 func (d *Dependencies) pingCfg() *ping.Config {

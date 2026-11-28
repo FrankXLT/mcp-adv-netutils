@@ -130,18 +130,11 @@
     "summary": "All 4 path hops reachable with 0% loss; average end-to-end latency 14.2 ms.",
     "created_at": "2026-11-26T22:45:00Z",
     "expires_at": "2026-12-26T22:45:00Z",
-    "waterfall": [
-      { "label": "Local Adapter", "startMs": 0, "durationMs": 0.18 },
-      { "label": "Gateway", "startMs": 0.18, "durationMs": 0.64 },
-      { "label": "ISP Transit", "startMs": 0.82, "durationMs": 8.45 },
-      { "label": "Destination", "startMs": 9.27, "durationMs": 4.93 },
-      { "label": "Total", "startMs": 0, "durationMs": 14.2, "isTotal": true }
-    ],
     "whiskers": [
-      { "label": "[1] Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
-      { "label": "[2] Gateway (192.0.2.1)", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
-      { "label": "[3] ISP Transit", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
-      { "label": "[4] Destination", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+      { "label": "[1] Local Adapter", "segment": "Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
+      { "label": "[2] Gateway (192.0.2.1)", "segment": "LAN Gateway", "hostname": "gw-core.example", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
+      { "label": "[3] ISP Transit", "segment": "ISP Core", "hostname": "core-transit.example.net", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
+      { "label": "[4] Destination", "segment": "Destination", "hostname": "one.one.one.one", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
     ]
   },
   "lan_inventory": {
@@ -253,17 +246,10 @@
         "created_at": "2026-11-26T22:45:00Z",
         "expires_at": "2026-12-26T22:45:00Z",
         "whiskers": [
-          { "label": "[1] Local Adapter", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
-          { "label": "[2] Gateway", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
-          { "label": "[3] ISP Transit", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
-          { "label": "[4] Destination", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
-        ],
-        "waterfall": [
-          { "label": "Local Adapter", "startMs": 0, "durationMs": 0.18 },
-          { "label": "Gateway", "startMs": 0.18, "durationMs": 0.64 },
-          { "label": "ISP Transit", "startMs": 0.82, "durationMs": 8.45 },
-          { "label": "Destination", "startMs": 9.27, "durationMs": 4.93 },
-          { "label": "Total", "startMs": 0, "durationMs": 14.2, "isTotal": true }
+          { "label": "[1] Local Adapter", "segment": "Host NIC", "hostname": "workstation.lan.example", "minMs": 0.12, "avgMs": 0.18, "maxMs": 0.31, "lossPct": 0 },
+          { "label": "[2] Gateway", "segment": "LAN Gateway", "hostname": "gw.lan.example", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
+          { "label": "[3] ISP Transit", "segment": "ISP Core", "hostname": "core-01.transit.example.net", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
+          { "label": "[4] Destination", "segment": "Anycast Edge", "hostname": "one.one.one.one", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
         ]
       },
       {
@@ -288,13 +274,40 @@
         "target": "198.51.100.44",
         "status": "WARN",
         "duration_ms": 78,
-        "summary": "Hop 3 jitter spike (28.4 ms avg, 64.2 ms peak, 5% packet loss); path packet limit 1420 bytes.",
+        "summary": "Reached 198.51.100.44 via TCP 443 over 6 hops (3 silent transit routers flowing); Hop 6 peak 64.2 ms with 5% loss, path MTU 1420 B.",
         "created_at": "2026-11-26T21:58:00Z",
         "expires_at": "2026-12-26T21:58:00Z",
+        "data": {
+          "probe_mode": "TCP 443",
+          "path_mtu": 1420,
+          "reached": true,
+          "silent_transit_hops": 3,
+          "dest_loss_pct": 5,
+          "mtu": { "discovered_mtu": 1420, "wireguard_safe_mtu": 1340, "blackhole_detected": false, "probe_mode": "ICMP DF" },
+          "mtr": {
+            "target": "198.51.100.44",
+            "probe_mode": "TCP 443",
+            "cycles": 20,
+            "reached": true,
+            "silent_transit_hops": 3,
+            "dest_loss_pct": 5,
+            "hops": [
+              { "hop": 1, "ip": "192.0.2.1", "hostname": "gw.lan.example", "loss_pct": 0, "best_ms": 0.31, "avg_ms": 0.45, "worst_ms": 0.82, "stdev_ms": 0.14 },
+              { "hop": 2, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+              { "hop": 3, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+              { "hop": 4, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+              { "hop": 5, "ip": "198.51.100.1", "hostname": "edge-01.transit.example.net", "loss_pct": 0, "best_ms": 6.8, "avg_ms": 8.1, "worst_ms": 11.4, "stdev_ms": 1.2 },
+              { "hop": 6, "ip": "198.51.100.44", "hostname": "app.edge.example", "loss_pct": 5, "best_ms": 18.2, "avg_ms": 28.4, "worst_ms": 64.2, "stdev_ms": 11.8 }
+            ]
+          }
+        },
         "whiskers": [
-          { "label": "Hop 1 (192.0.2.1)", "minMs": 0.31, "avgMs": 0.45, "maxMs": 0.82, "lossPct": 0 },
-          { "label": "Hop 2 (198.51.100.1)", "minMs": 6.8, "avgMs": 8.1, "maxMs": 11.4, "lossPct": 0 },
-          { "label": "Hop 3 (198.51.100.44)", "minMs": 18.2, "avgMs": 28.4, "maxMs": 64.2, "lossPct": 5 }
+          { "hop": 1, "label": "Hop 1 (192.0.2.1)", "segment": "LAN Gateway", "hostname": "gw.lan.example", "minMs": 0.31, "avgMs": 0.45, "maxMs": 0.82, "lossPct": 0 },
+          { "hop": 2, "label": "Hop 2 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+          { "hop": 3, "label": "Hop 3 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+          { "hop": 4, "label": "Hop 4 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+          { "hop": 5, "label": "Hop 5 (198.51.100.1)", "segment": "Transit Peering", "hostname": "edge-01.transit.example.net", "minMs": 6.8, "avgMs": 8.1, "maxMs": 11.4, "lossPct": 0 },
+          { "hop": 6, "label": "Hop 6 (198.51.100.44)", "segment": "Destination", "hostname": "app.edge.example", "minMs": 18.2, "avgMs": 28.4, "maxMs": 64.2, "lossPct": 5 }
         ]
       },
       {
@@ -384,13 +397,30 @@
         "target": "198.51.100.44",
         "status": "FAIL",
         "duration_ms": 142,
-        "summary": "25% packet loss and 118.4 ms peak latency at Hop 3 (198.51.100.44).",
+        "summary": "25% destination loss and 118.4 ms peak latency at Hop 5 (198.51.100.44); 2 silent transit routers flowing.",
         "created_at": "2026-11-18T16:45:00Z",
         "expires_at": "2026-12-18T16:45:00Z",
+        "data": {
+          "target": "198.51.100.44",
+          "probe_mode": "ICMP",
+          "cycles": 20,
+          "reached": true,
+          "silent_transit_hops": 2,
+          "dest_loss_pct": 25,
+          "hops": [
+            { "hop": 1, "ip": "192.0.2.1", "hostname": "gw.lan.example", "loss_pct": 0, "best_ms": 0.34, "avg_ms": 0.48, "worst_ms": 0.92, "stdev_ms": 0.15 },
+            { "hop": 2, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+            { "hop": 3, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+            { "hop": 4, "ip": "198.51.100.1", "hostname": "edge-01.transit.example.net", "loss_pct": 0, "best_ms": 7.4, "avg_ms": 9.1, "worst_ms": 14.2, "stdev_ms": 1.6 },
+            { "hop": 5, "ip": "198.51.100.44", "hostname": "app.edge.example", "loss_pct": 25, "best_ms": 19.4, "avg_ms": 42.6, "worst_ms": 118.4, "stdev_ms": 22.4 }
+          ]
+        },
         "whiskers": [
-          { "label": "Hop 1 (192.0.2.1)", "minMs": 0.34, "avgMs": 0.48, "maxMs": 0.92, "lossPct": 0 },
-          { "label": "Hop 2 (198.51.100.1)", "minMs": 7.4, "avgMs": 9.1, "maxMs": 14.2, "lossPct": 0 },
-          { "label": "Hop 3 (198.51.100.44)", "minMs": 19.4, "avgMs": 42.6, "maxMs": 118.4, "lossPct": 25 }
+          { "hop": 1, "label": "Hop 1 (192.0.2.1)", "segment": "LAN Gateway", "hostname": "gw.lan.example", "minMs": 0.34, "avgMs": 0.48, "maxMs": 0.92, "lossPct": 0 },
+          { "hop": 2, "label": "Hop 2 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+          { "hop": 3, "label": "Hop 3 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+          { "hop": 4, "label": "Hop 4 (198.51.100.1)", "segment": "Transit Peering", "hostname": "edge-01.transit.example.net", "minMs": 7.4, "avgMs": 9.1, "maxMs": 14.2, "lossPct": 0 },
+          { "hop": 5, "label": "Hop 5 (198.51.100.44)", "segment": "Destination", "hostname": "app.edge.example", "minMs": 19.4, "avgMs": 42.6, "maxMs": 118.4, "lossPct": 25 }
         ]
       },
       {
@@ -542,11 +572,92 @@
     "traceroute": {
       "status": "OK",
       "duration_ms": 29,
-      "summary": "Reached 203.0.113.8 in 3 hops (14.2 ms final hop).",
+      "summary": "Reached 203.0.113.8 via TCP 443 in 5 hops (2 silent transit routers flowing, 14.2 ms final hop).",
+      "data": {
+        "target": "edge.example",
+        "resolved_ip": "203.0.113.8",
+        "probe_mode": "TCP 443",
+        "reached_destination": true,
+        "silent_transit_hops": 2,
+        "dest_loss_pct": 0,
+        "hops": [
+          { "hop": 1, "ip": "192.0.2.1", "hostname": "gw.lan.example", "avg_rtt_ms": 0.82, "timed_out": false },
+          { "hop": 2, "ip": "*", "hostname": "", "timed_out": true, "silent": true },
+          { "hop": 3, "ip": "*", "hostname": "", "timed_out": true, "silent": true },
+          { "hop": 4, "ip": "198.51.100.1", "hostname": "edge-01.transit.example.net", "avg_rtt_ms": 9.27, "timed_out": false },
+          { "hop": 5, "ip": "203.0.113.8", "hostname": "edge.example", "avg_rtt_ms": 14.2, "timed_out": false }
+        ]
+      },
       "whiskers": [
-        { "label": "1: 192.0.2.1", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
-        { "label": "2: 198.51.100.1", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
-        { "label": "3: 203.0.113.8", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+        { "hop": 1, "label": "1: 192.0.2.1", "segment": "LAN Gateway", "hostname": "gw.lan.example", "minMs": 0.41, "avgMs": 0.82, "maxMs": 1.45, "lossPct": 0 },
+        { "hop": 2, "label": "2: *", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 3, "label": "3: *", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 4, "label": "4: 198.51.100.1", "segment": "Transit Peering", "hostname": "edge-01.transit.example.net", "minMs": 7.9, "avgMs": 9.27, "maxMs": 13.4, "lossPct": 0 },
+        { "hop": 5, "label": "5: 203.0.113.8", "segment": "Destination", "hostname": "edge.example", "minMs": 12.1, "avgMs": 14.2, "maxMs": 19.8, "lossPct": 0 }
+      ]
+    },
+    "mtr_path_quality": {
+      "status": "OK",
+      "duration_ms": 135,
+      "summary": "Reached 203.0.113.8 across 5 hops via ICMP (2 silent transit routers flowing, 0% destination loss).",
+      "data": {
+        "target": "203.0.113.8",
+        "probe_mode": "ICMP",
+        "cycles": 15,
+        "reached": true,
+        "silent_transit_hops": 2,
+        "dest_loss_pct": 0,
+        "hops": [
+          { "hop": 1, "ip": "192.0.2.1", "hostname": "gw.lan.example", "loss_pct": 0, "best_ms": 0.35, "avg_ms": 0.54, "worst_ms": 0.91, "stdev_ms": 0.12 },
+          { "hop": 2, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+          { "hop": 3, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+          { "hop": 4, "ip": "198.51.100.1", "hostname": "edge-01.transit.example.net", "loss_pct": 0, "best_ms": 7.2, "avg_ms": 8.9, "worst_ms": 12.6, "stdev_ms": 1.3 },
+          { "hop": 5, "ip": "203.0.113.8", "hostname": "edge.example", "loss_pct": 0, "best_ms": 11.9, "avg_ms": 13.8, "worst_ms": 18.7, "stdev_ms": 1.9 }
+        ]
+      },
+      "whiskers": [
+        { "hop": 1, "label": "Hop 1 (192.0.2.1)", "segment": "LAN Gateway", "hostname": "gw.lan.example", "minMs": 0.35, "avgMs": 0.54, "maxMs": 0.91, "lossPct": 0 },
+        { "hop": 2, "label": "Hop 2 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 3, "label": "Hop 3 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 4, "label": "Hop 4 (198.51.100.1)", "segment": "Transit Peering", "hostname": "edge-01.transit.example.net", "minMs": 7.2, "avgMs": 8.9, "maxMs": 12.6, "lossPct": 0 },
+        { "hop": 5, "label": "Hop 5 (203.0.113.8)", "segment": "Destination", "hostname": "edge.example", "minMs": 11.9, "avgMs": 13.8, "maxMs": 18.7, "lossPct": 0 }
+      ]
+    },
+    "recipe_path_autopsy": {
+      "status": "WARN",
+      "duration_ms": 94,
+      "summary": "Reached 198.51.100.44 via TCP 443 across 6 hops (3 silent transit routers flowing); Hop 6 5% loss, path MTU 1420 B.",
+      "data": {
+        "probe_mode": "TCP 443",
+        "path_mtu": 1420,
+        "reached": true,
+        "silent_transit_hops": 3,
+        "dest_loss_pct": 5,
+        "mtu": { "discovered_mtu": 1420, "wireguard_safe_mtu": 1340, "blackhole_detected": false, "probe_mode": "ICMP DF" },
+        "mtr": {
+          "target": "198.51.100.44",
+          "probe_mode": "TCP 443",
+          "cycles": 20,
+          "reached": true,
+          "silent_transit_hops": 3,
+          "dest_loss_pct": 5,
+          "hops": [
+            { "hop": 1, "ip": "192.0.2.1", "hostname": "gw.lan.example", "loss_pct": 0, "best_ms": 0.31, "avg_ms": 0.45, "worst_ms": 0.82, "stdev_ms": 0.14 },
+            { "hop": 2, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+            { "hop": 3, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+            { "hop": 4, "ip": "*", "hostname": "", "loss_pct": 100, "silent": true, "best_ms": 0, "avg_ms": 0, "worst_ms": 0, "stdev_ms": 0 },
+            { "hop": 5, "ip": "198.51.100.1", "hostname": "edge-01.transit.example.net", "loss_pct": 0, "best_ms": 6.8, "avg_ms": 8.1, "worst_ms": 11.4, "stdev_ms": 1.2 },
+            { "hop": 6, "ip": "198.51.100.44", "hostname": "app.edge.example", "loss_pct": 5, "best_ms": 18.2, "avg_ms": 28.4, "worst_ms": 64.2, "stdev_ms": 11.8 }
+          ]
+        }
+      },
+      "whiskers": [
+        { "hop": 1, "label": "Hop 1 (192.0.2.1)", "segment": "LAN Gateway", "hostname": "gw.lan.example", "minMs": 0.31, "avgMs": 0.45, "maxMs": 0.82, "lossPct": 0 },
+        { "hop": 2, "label": "Hop 2 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 3, "label": "Hop 3 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 4, "label": "Hop 4 (*)", "silent": true, "minMs": 0, "avgMs": 0, "maxMs": 0, "lossPct": 100 },
+        { "hop": 5, "label": "Hop 5 (198.51.100.1)", "segment": "Transit Peering", "hostname": "edge-01.transit.example.net", "minMs": 6.8, "avgMs": 8.1, "maxMs": 11.4, "lossPct": 0 },
+        { "hop": 6, "label": "Hop 6 (198.51.100.44)", "segment": "Destination", "hostname": "app.edge.example", "minMs": 18.2, "avgMs": 28.4, "maxMs": 64.2, "lossPct": 5 }
       ]
     },
     "tcp_port_scan": {

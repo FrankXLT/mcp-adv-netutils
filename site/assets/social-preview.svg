@@ -24,7 +24,7 @@
 <line x1="33" y1="576" x2="1247" y2="576" stroke="#EEF2F6" stroke-width="1"/>
 <line x1="736" y1="68" x2="736" y2="572" stroke="#E2E8F0" stroke-width="1"/>
 <rect x="72" y="72" width="44" height="6" fill="#1D4ED8"/>
-<text x="128" y="80" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" font-weight="700" letter-spacing="1.1" fill="#1D4ED8">OAW PROJECTS · V2.0.1 · MCP SERVER &amp; STUDIO</text>
+<text x="128" y="80" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" font-weight="700" letter-spacing="1.1" fill="#1D4ED8">OAW PROJECTS · V2.1.0 · MCP SERVER &amp; STUDIO</text>
 <text x="72" y="138" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="44" font-weight="700" fill="#0F172A">Advanced Network</text>
 <text x="72" y="192" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="44" font-weight="700" fill="#0F172A">Utilities</text>
 <text x="72" y="260" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="21" fill="#334155">Outage triage, Saved Destinations, interactive</text>

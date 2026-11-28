@@ -1,11 +1,11 @@
 ---
 name: netutils-cron-monitor
-description: Monitor scheduled watchlist checks and saved destinations across the 33-tool suite with get_cron_status (24h/7d/30d), manage_cron_watchlist, manage_saved_destinations (list/save/delete/run + dest_<id> watchlist sync), get_job_report (30d retention and expires_at), Two-Tick Alert Hysteresis, and 7d-to-30d down-aging.
+description: Monitor scheduled watchlist checks and saved destinations across the 33-tool suite with get_cron_status (24h/7d/30d), manage_cron_watchlist, manage_saved_destinations (list/save/delete/run + dest_<id> watchlist sync), get_job_report (30d retention and expires_at), render_run_digest (1-call historical window auditing & window_summary), Two-Tick Alert Hysteresis, and 7d-to-30d down-aging.
 ---
 
 # `netutils-cron-monitor`
 
-Operational playbook for operating the `mcp-adv-netutils` scheduled watchlist daemon, managing Saved Destinations, reviewing uptime rollups, and inspecting job report retention.
+Operational playbook for operating the `mcp-adv-netutils` scheduled watchlist daemon, managing Saved Destinations, reviewing uptime rollups, auditing historical time windows, and inspecting job report retention.
 
 ## Core Tools
 
@@ -15,6 +15,7 @@ Operational playbook for operating the `mcp-adv-netutils` scheduled watchlist da
 | `manage_cron_watchlist` | Lists, adds, updates, pauses, resumes, or removes scheduled checks |
 | `manage_saved_destinations` | `list` \| `save` \| `delete` \| `run` persisted targets with `dest_<id>` cron watchlist sync |
 | `get_job_report` | Fetches full stored execution details (`30d` retention + `expires_at` countdown) |
+| `render_run_digest` | Re-renders a stored `job_id` or runs 1-call historical time-window audits (`window_summary`) |
 
 ## Reviewing Scheduled Health (`get_cron_status`)
 
@@ -24,6 +25,22 @@ Call `get_cron_status` with the desired rollup window:
 - **`30d`**: Monthly SLA/uptime rollup—inspects long-term reliability using compacted healthy tick history.
 
 Use `style: "quick"` (`<= 40` cols) on mobile or `style: "default"` / `"rich"` for desktop triage.
+
+## Historical Time-Window Auditing & Trend Summaries (`render_run_digest`)
+
+In `v2.1.0`, `render_run_digest` supports **1-call historical time-window auditing** across `netutils_jobs.db` without pulling individual job reports one by one:
+
+- **Time Window Parameters**:
+  - `window`: `"1h"`, `"6h"`, `"24h"`, `"7d"`, or `"30d"`.
+  - `since` / `until` *(optional)*: Explicit bounds in RFC3339 or Unix seconds.
+- **Filter & Pagination Parameters**:
+  - `target`: Substring match against the target host/URL/CIDR.
+  - `tool_name`: Filter to a specific diagnostic tool.
+  - `status`: `"OK"`, `"WARN"`, or `"FAIL"`.
+  - `incidents_only`: Set `true` to return only non-OK runs.
+  - `limit`: Rows in the returned digest list (default `25`, max `100`).
+- **Aggregate `window_summary`**: Computes **pass rate %**, **total matching count**, **`avg`/`min`/`max` duration**, **top failing/warning targets**, and **per-tool breakdown** across **ALL matching rows** in 1 MCP call (even when `limit` caps the row list).
+- **Output & Payload Budgets**: Strictly bounded to **`< 18.5 KB`** in `"json"` mode, **`72c`** (`default`), **`<=40c`** (`quick`), and **`76c`** (`rich`).
 
 ## Two-Tick Alert Hysteresis
 
@@ -37,12 +54,12 @@ When triaging a `WARN` in `get_cron_status`, check whether it is a single-tick b
 
 ## Inspecting Detailed Runs (`get_job_report`)
 
-1. Locate the `job_id` from `get_cron_status` or recipe output.
+1. Locate the `job_id` from `get_cron_status`, `render_run_digest`, or recipe output.
 2. Call `get_job_report` to retrieve the full persisted diagnostic output, timestamps, and status history.
 3. Note the **`30d` retention window** and **`expires_at` countdown**:
    - Job reports are stored in SQLite (`netutils_jobs.db`) for **30 days** (`30d`).
    - `expires_at` indicates exactly how much time remains before automatic TTL pruning removes the record.
-   - Re-render any stored job report into a different display format (`default`, `quick`, `rich`, `json`) using `render_run_digest`.
+   - Re-render any stored `job_id` into a different display format (`default`, `quick`, `rich`, `json`) using `render_run_digest`.
 
 ## `7d -> 30d` Healthy Tick Down-Aging
 

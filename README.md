@@ -1,4 +1,5 @@
-# Advanced Network Utilities (`mcp-adv-netutils`) v2.0.1
+# Advanced Network Utilities (`mcp-adv-netutils`) v2.1.0
+<!-- mcp-name: io.github.FrankXLT/mcp-adv-netutils -->
 
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Ffrankxlt%2Fmcp--adv--netutils-blue?logo=docker)](https://github.com/FrankXLT/mcp-adv-netutils/pkgs/container/mcp-adv-netutils)
 [![Project Showcase](https://img.shields.io/badge/OAW%20Projects-Overview%20%7C%20Demo%20%7C%20Docs-2563eb)](https://projects.oaworkbench.org/mcp-adv-netutils/)
@@ -10,30 +11,33 @@
 
 ---
 
-## What's New in v2.0.1
+## What's New in v2.1.0
 
-- **v2.0.1 Operator Studio Polish & Reliability**: Refines Operator Studio (`/web`) responsiveness, visual contrast/layout polish, and runtime reliability across probes, cron monitoring, and static `?demo=1` showcase previews.
+- **Fast Parallel Wave MTR & Smart Protocol Auto-Fallback**: Parallel per-TTL wave MTR completes in `~2–5s` using unique per-hop/per-cycle `(ID, Seq)` encoding and trailing-hop trim, paired with automatic `ICMP -> TCP 443/80 -> UDP` fallback across `traceroute`, `mtr_path_quality`, and `recipe_path_autopsy`.
+- **Silent Transit vs. Real Loss Separation**: Distinguishes silent CoPP transit routers (`*`) from real packet loss via `silent_transit_hops` and `dest_loss_pct`, rendered in charts as collapsed neutral gray bands rather than false `100%` loss spikes.
+- **`/web` Studio Live Progress, `Appearance ▾` & `Multi-Point Ping`**: Adds an In-Flight Progress Card with `Cancel` (`AbortController`), a consolidated `Appearance ▾` popover (themes + spacing), and a unified single-chart `Multi-Point Ping` view.
+- **Historical Window Auditing (`render_run_digest`)**: One-call window auditing and trend summaries (`window`, `since`/`until`, `target`, `tool_name`, `status`, `incidents_only`, `limit`, `window_summary`) across the 30-day SQLite archive.
+- **GitHub Community Standards & MCP Registry Readiness**: Ships 100% GitHub Community Standards (`CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, issue/PR templates, updated `LICENSE`) and verified MCP Registry ownership (`mcp-name: io.github.FrankXLT/mcp-adv-netutils`).
 - **Zero Node.js / Zero `supergateway` Runtime**: Ships as a single static `CGO_ENABLED=0` Go binary inside a single-layer Alpine container (`~41.5 MB` unpacked / `~11.4 MB` compressed, `USER netutils`, `setcap cap_net_raw+ep` via `RUN --mount=type=bind`), serving native `--stdio`, Streamable HTTP, backward-compatible `/sse`, `/web`, and `/healthz`.
-- **33 Registered MCP Tools**: Combines 12 hardened core tools, 6 active L2–L7 probes, 8 coordinated Diagnostic Recipes (`recipe_*`), `render_run_digest`, 4 Cron, Saved Destinations & Archive tools (adding `manage_saved_destinations`), and `unlock_netutils`/`lock_netutils`.
+- **33 Registered MCP Tools**: Combines 12 hardened core tools, 6 active L2–L7 probes, 8 coordinated Diagnostic Recipes (`recipe_*`), `render_run_digest`, 4 Cron, Saved Destinations & Archive tools (including `manage_saved_destinations`), and `unlock_netutils`/`lock_netutils`.
 - **Three-Tier ASCII Styles (`style`)**: Deterministic monospace cards across every tool and recipe—`default` (`72` columns exact), `quick` (`<= 40` columns borderless for `390px` mobile), `rich` (`76` columns boxed TUI), and `json` (`< 18.5 KB` wire cap with `FAIL`/`WARN` sorted first).
 - **30-Day SQLite Job Archive, Saved Destinations & Two-Tick Cron Watchlist**: Pure-Go `robfig/cron/v3` scheduler running `watchlist.yaml` plus `dest_<id>` Saved Destination monitors into WAL SQLite (`netutils_jobs.db` via `modernc.org/sqlite`), featuring **Two-Tick Alert Hysteresis** (`>= 2` consecutive non-OK ticks), **`7d -> 30d` healthy tick down-aging**, hourly TTL reaping + `PRAGMA incremental_vacuum`, and `--max-store-mb 256` cap.
 - **Thirty-Minute Passphrase Deadbolt & Two-Doorway Setup**: Voice-normalized SHA-256 lock (`PASS_HASH` + `crypto/subtle.ConstantTimeCompare`) paired with a remote `/{PATH_SECRET}/mcp` + `/web` doorway, a LAN-only `/lan/{LAN_MCP_TOKEN}/mcp` + `/sse` doorway, and central CIDR target guard blocking `169.254.0.0/16`.
-- **Embedded 4-Theme Network Studio (`/web`)**: Responsive Quiet UI (`//go:embed`) across `Pure White`, `Warm Paper`, `Dark`, and `Dark Paper` themes featuring Apache ECharts SVG visualizations, Pinned Destinations & **Scan Pinned**, goal-grouped checks, Chart/Table toggle, Summary/TSV export, Saved Destinations manager, and Past Run Drawer (**Run Again & Compare**), plus `?demo=1` preview mode.
 - **5 Bundled Agent Skills (`skills/`)**: Ready-to-use `SKILL.md` playbooks guiding LLM formatting, differential ping interpretation, LAN radar sweeps, split-horizon triage, and cron/destination monitoring.
 
 ---
 
 ## MCP Tool Suite
 
-`mcp-adv-netutils` v2.0.1 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
+`mcp-adv-netutils` v2.1.0 provides **30 core diagnostic, recipe, destination, and archive tools** (`12` hardened core + `6` active L2–L7 + `8` Diagnostic Recipes + `4` Cron, Destinations & Archive), plus `render_run_digest` and the `unlock_netutils` / `lock_netutils` Deadbolt controls (`33` total registered MCP tools).
 
 ### 1. Hardened Core Tools (12)
 
-| Tool | Layer | Capabilities & v2.0.1 Hardening |
+| Tool | Layer | Capabilities & v2.1.0 Hardening |
 | :--- | :--- | :--- |
 | **`mac_vendor_lookup`** | L2 | Embedded `39,800+` IEEE OUI lookup; separates physical `[UAA]` from Docker/VM `[LAA]` (`02:42:...`) |
 | **`ping`** | L3 | Per-call Echo ID/sequence isolation, IPv4/IPv6 TTL control messages, explicit `probe_mode` (`icmp` vs `tcp_fallback`) |
-| **`traceroute`** | L3 | Rejects leading `-` targets, enforces `"--"`, bounds concurrent hop PTR lookups |
+| **`traceroute`** | L3 | Rejects leading `-` targets, enforces `"--"`, bounds concurrent hop PTR lookups, smart `ICMP -> TCP 443/80 -> UDP` auto-fallback |
 | **`tcp_port_scan`** | L4 | Concurrent TCP connect scan with named presets (`common`, `homelab`, `web`, `iot`; default `common`) |
 | **`dns_reverse_batch`** | L7 | Concurrent reverse PTR resolution capped at `256` validated IPs per call |
 | **`wol_wake`** | L2 | Sends standard 102-byte UDP Wake-on-LAN Magic Packet frames (`port` `7` or `9`) |
@@ -50,7 +54,7 @@
 | :--- | :--- | :--- |
 | **`arp_neighbor_sweep`** | L2 | OS/ARP neighbor discovery (`mdlayher/arp`) enriched with OUI vendors and UAA/LAA flags |
 | **`mtu_path_probe`** | L3 | Probes `1500` / `1492` / `1420` / `1280` DF frames to catch tunnel and WAN fragmentation black holes |
-| **`mtr_path_quality`** | L3 | Multi-cycle per-hop loss, min/avg/max RTT, and jitter path quality matrix |
+| **`mtr_path_quality`** | L3 | Fast parallel per-TTL wave MTR (`~2–5s`, unique `(ID, Seq)` encoding, trailing-hop trim), `ICMP -> TCP 443/80 -> UDP` fallback, and `silent_transit_hops` vs. `dest_loss_pct` separation |
 | **`mdns_ssdp_discover`** | L7 | Bounded mDNS (`hashicorp/mdns`) and SSDP local service discovery |
 | **`split_dns_audit`** | L7 | Side-by-side comparison of internal local DNS vs. external DoH answers |
 | **`snmp_switch_port`** | L2 | Read-only SNMP (`gosnmp`) switch port, VLAN, and MAC FDB correlation |
@@ -59,8 +63,8 @@
 
 | Category | Tools | Purpose |
 | :--- | :--- | :--- |
-| **Diagnostic Recipes (8)** | `recipe_diff_ping`, `recipe_diff_dns`, `recipe_diff_http`, `recipe_diff_snapshot`, `recipe_host_card`, `recipe_lan_radar`, `recipe_path_autopsy`, `recipe_wake_verify` | Coordinated multi-probe differential ladders, UAA/LAA LAN sweeps, before/after snapshot diffs (`[+]`, `[-]`, `[~]`), and WOL verification |
-| **Digest Renderer (1)** | `render_run_digest` | Re-renders any persisted `job_id` report on demand into `default`, `quick`, `rich`, or `json` |
+| **Diagnostic Recipes (8)** | `recipe_diff_ping`, `recipe_diff_dns`, `recipe_diff_http`, `recipe_diff_snapshot`, `recipe_host_card`, `recipe_lan_radar`, `recipe_path_autopsy`, `recipe_wake_verify` | Coordinated multi-probe differential ladders (`recipe_path_autopsy` with `ICMP -> TCP 443/80 -> UDP` fallback & silent transit separation), UAA/LAA LAN sweeps, before/after snapshot diffs (`[+]`, `[-]`, `[~]`), and WOL verification |
+| **Digest Renderer (1)** | `render_run_digest` | Re-renders any persisted `job_id` into `default`/`quick`/`rich`/`json` and supports one-call historical window auditing (`window`, `since`/`until`, `target`, `tool_name`, `status`, `incidents_only`, `limit`, `window_summary`) |
 | **Cron, Destinations & Archive (4)** | `get_cron_status`, `manage_cron_watchlist`, `manage_saved_destinations`, `get_job_report` | `< 5ms` `24h`/`7d`/`30d` ASCII health strips, `watchlist.yaml` management, `list`/`save`/`delete`/`run` saved targets (`TargetGuard` + `dest_<id>` cron sync), and 30-day `job_id` re-pulls with `expires_at` |
 | **Deadbolt Session (2)** | `unlock_netutils`, `lock_netutils` | Voice-normalized SHA-256 unlock (`30m` sliding TTL) and immediate manual relock |
 
@@ -106,10 +110,11 @@ See [SECURITY.md](SECURITY.md) for full details on the 5-layer defense-in-depth 
 
 ## Embedded Operator Studio (`/web`)
 
-Compiled directly into the Go binary (`//go:embed`), `/web` provides a 4-theme Quiet UI Network Studio (`Pure White`, `Warm Paper`, `Dark`, `Dark Paper`) with Comfortable (`d2`) and Compact (`d3`) density:
+Compiled directly into the Go binary (`//go:embed`), `/web` provides a 4-theme Quiet UI Network Studio (`Pure White`, `Warm Paper`, `Dark`, `Dark Paper`) with a consolidated **`Appearance ▾`** popover (themes + Comfortable `d2` / Compact `d3` spacing):
 
 - **Pre-Unlock Gate**: Clean passphrase challenge when `PASS_HASH` is locked, with a 1-tap link to depersonalized `?demo=1` preview fixtures.
-- **Apache ECharts SVG Visualizations & Export**: Theme-aware Apache ECharts SVG charts for path latency whiskers, HTTP timing waterfalls, DNS comparisons, and `24h`/`7d`/`30d` uptime timelines, paired with a **Chart / Table** toggle and **Copy Summary** / **Copy Data** (TSV) export.
+- **Live In-Flight Progress Card & Cancellation**: Displays real-time probe execution progress with a 1-click **`Cancel`** control (`AbortController`) to abort long-running sweeps cleanly.
+- **Apache ECharts SVG Visualizations & Single-Chart Multi-Point Ping**: Theme-aware Apache ECharts SVG charts for path latency whiskers (with collapsed neutral gray bands for silent CoPP transit hops), unified single-chart **`Multi-Point Ping`**, HTTP timing waterfalls, DNS comparisons, and `24h`/`7d`/`30d` uptime timelines, paired with a **Chart / Table** toggle and **Copy Summary** / **Copy Data** (TSV) export.
 - **Pinned Destinations & Goal-Grouped Checks**: 1-click Pinned Destinations bar + **Scan Pinned** sweep, goal-grouped check selector (`Connectivity`, `Web & TLS`, `DNS`, `Local Network`), and a full **Saved Destinations** manager (`add`, `edit`, `pin`, `monitor`, `delete`).
 - **Three Integrated Tabs & Past Run Drawer**: **`Checks`**, **`Local Network`** (Physical Hardware vs. Containers & VMs with `Ping`/`Ports`/`Wake`/`Save` actions and baseline diffs), and **`Schedule & History`** (`24h`/`7d`/`30d` health timeline + 30-day Past Check Runs opening the **Past Run Drawer** with **Run Again & Compare**).
 - **Responsive Breakpoints**: `>= 40px` touch targets and `>= 16px` inputs with `0px` horizontal overflow at `390px` (phone), 2-pane workspace at `900px` (tablet), and full Studio workspace at `1440px+` (desktop).
@@ -194,6 +199,10 @@ docker run -d \
   }
 }
 ```
+
+### MCP Registry
+
+This server is published for the GitHub / Official MCP Registry under `mcp-name: io.github.FrankXLT/mcp-adv-netutils`.
 
 ---
 

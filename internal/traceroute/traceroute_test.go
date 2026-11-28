@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FrankXLT/mcp-adv-netutils/internal/probe"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/miekg/dns"
@@ -41,16 +42,20 @@ func TestTracerouteHelperProcess(t *testing.T) {
 	}
 
 	cmdArgs := args[sepIdx+1:]
-	// Expect: -n -w <timeout> -m <maxHops> -- <target>
-	if len(cmdArgs) != 7 || cmdArgs[0] != "-n" || cmdArgs[1] != "-w" || cmdArgs[3] != "-m" || cmdArgs[5] != "--" {
-		fmt.Fprintf(os.Stderr, "unexpected args: %v\n", cmdArgs)
+	isICMP := len(cmdArgs) > 0 && cmdArgs[0] == "-I"
+	if isICMP {
+		cmdArgs = cmdArgs[1:]
+	}
+	// Expect: -n -q 2 -w <timeout> -m <maxHops> -- <target>
+	if len(cmdArgs) != 9 || cmdArgs[0] != "-n" || cmdArgs[1] != "-q" || cmdArgs[2] != "2" || cmdArgs[3] != "-w" || cmdArgs[5] != "-m" || cmdArgs[7] != "--" {
+		fmt.Fprintf(os.Stderr, "unexpected args: %v\n", args[sepIdx+1:])
 		os.Exit(2)
 	}
+	target := cmdArgs[8]
 
-	mode := os.Getenv("TRACEROUTE_TEST_MODE")
-	switch mode {
+	switch os.Getenv("TRACEROUTE_TEST_MODE") {
 	case "normal":
-		fmt.Printf("traceroute to %s (%s), 15 hops max, 60 byte packets\n", cmdArgs[6], cmdArgs[6])
+		fmt.Printf("traceroute to %s (%s), 20 hops max, 60 byte packets\n", target, target)
 		fmt.Println(" 1  192.168.1.1  0.500 ms  1.000 ms  1.500 ms")
 		fmt.Println(" 2  * * *")
 		fmt.Println(" 3  * 10.0.0.3  2.500 ms  3.500 ms")
@@ -59,14 +64,24 @@ func TestTracerouteHelperProcess(t *testing.T) {
 		fmt.Println("    10.0.0.7  7.000 ms")
 		fmt.Println(" 6  127.0.0.1  0.250 ms  0.350 ms")
 		os.Exit(0)
+	case "icmp_unreached_udp_ok":
+		fmt.Printf("traceroute to %s (%s), 20 hops max, 60 byte packets\n", target, target)
+		fmt.Println(" 1  192.168.1.1  1.000 ms  1.200 ms")
+		fmt.Println(" 2  * * *")
+		if isICMP {
+			os.Exit(1)
+		}
+		fmt.Printf(" 3  %s  2.000 ms  3.000 ms\n", target)
+		fmt.Println(" 4  * * *")
+		os.Exit(0)
 	case "many_hops":
-		fmt.Printf("traceroute to %s (%s), 15 hops max, 60 byte packets\n", cmdArgs[6], cmdArgs[6])
+		fmt.Printf("traceroute to %s (%s), 20 hops max, 60 byte packets\n", target, target)
 		for i := 1; i <= 14; i++ {
 			fmt.Printf(" %d  10.0.1.%d  1.000 ms\n", i, i)
 		}
 		os.Exit(0)
 	case "exit1_with_hops":
-		fmt.Printf("traceroute to %s (%s), 15 hops max, 60 byte packets\n", cmdArgs[6], cmdArgs[6])
+		fmt.Printf("traceroute to %s (%s), 20 hops max, 60 byte packets\n", target, target)
 		fmt.Println(" 1  192.168.1.1  1.000 ms")
 		fmt.Println(" 2  * * *")
 		os.Exit(1)
@@ -239,33 +254,26 @@ func TestExecuteWaitErrorHandling(t *testing.T) {
 		lookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) { return nil, nil },
 		lookupAddr:   func(context.Context, string) ([]string, error) { return nil, errors.New("none") },
 	}
-
 	t.Run("exit1_with_parsed_hops_succeeds", func(t *testing.T) {
 		deps := baseDeps
 		deps.commandContext = helperCommandContext("exit1_with_hops")
-
 		res, err := executeWithDeps(context.Background(), TracerouteParams{Target: "127.0.0.1"}, nil, deps)
 		require.NoError(t, err)
 		require.Len(t, res.Hops, 2)
 		assert.False(t, res.ReachedDestination)
 	})
-
 	t.Run("exit1_with_no_hops_fails", func(t *testing.T) {
 		deps := baseDeps
 		deps.commandContext = helperCommandContext("exit1_no_hops")
-
 		_, err := executeWithDeps(context.Background(), TracerouteParams{Target: "127.0.0.1"}, nil, deps)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "traceroute failed")
 	})
-
 	t.Run("canceled_context_fails", func(t *testing.T) {
 		deps := baseDeps
 		deps.commandContext = helperCommandContext("sleep")
-
 		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 		defer cancel()
-
 		_, err := executeWithDeps(ctx, TracerouteParams{Target: "127.0.0.1"}, nil, deps)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "traceroute canceled")
@@ -273,15 +281,7 @@ func TestExecuteWaitErrorHandling(t *testing.T) {
 }
 
 func TestHandleTracerouteRejectsInvalidTarget(t *testing.T) {
-	req := mcp.CallToolRequest{
-		Params: mcp.CallToolParams{
-			Name: "traceroute",
-			Arguments: map[string]any{
-				"target": "-h",
-			},
-		},
-	}
-
+	req := mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "traceroute", Arguments: map[string]any{"target": "-h"}}}
 	_, err := HandleTraceroute(context.Background(), req)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, security.ErrTargetInvalid))
@@ -289,11 +289,9 @@ func TestHandleTracerouteRejectsInvalidTarget(t *testing.T) {
 
 func TestTracerouteResponseJSONSchema(t *testing.T) {
 	res := TracerouteResponse{
-		Target:     "127.0.0.1",
-		ResolvedIP: "127.0.0.1",
-		MaxHops:    15,
-		Hops:       []HopResult{{Hop: 1, IP: "127.0.0.1", RTTMs: []float64{0.5}, AvgRTTMs: 0.5}},
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Target: "127.0.0.1", ResolvedIP: "127.0.0.1", MaxHops: 15,
+		Hops:      []HopResult{{Hop: 1, IP: "127.0.0.1", RTTMs: []float64{0.5}, AvgRTTMs: 0.5}},
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	b, err := json.Marshal(res)
 	require.NoError(t, err)
@@ -519,4 +517,108 @@ func TestValidateAndResolveTargetGuardPrefersIPv4(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "dualstack.example", target)
 	assert.Equal(t, "198.51.100.1", resolvedIP)
+}
+
+func TestExecuteFallbackCascade(t *testing.T) {
+	noPTR := func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") }
+	tests := []struct {
+		name, cmdMode, wantMode    string
+		tcpRes                     func(net.IP) *probe.MTRResult
+		wantCLI, wantTCP, wantHops int
+	}{
+		{"fast_icmp_hit", "normal", "icmp", func(net.IP) *probe.MTRResult { return nil }, 1, 0, 6},
+		{"icmp_to_tcp_trim", "exit1_no_hops", "tcp_443", func(ip net.IP) *probe.MTRResult {
+			return &probe.MTRResult{ProbeMode: "tcp_443", Reached: true, Hops: []probe.MTRHop{
+				{Hop: 1, IP: "192.168.1.1", Sent: 2, Received: 2, AvgMs: 1.5}, {Hop: 2, IP: "*", Sent: 2},
+				{Hop: 3, IP: ip.String(), Sent: 2, Received: 2, AvgMs: 4}, {Hop: 4, IP: "*", Sent: 2},
+			}}
+		}, 1, 1, 3},
+		{"tcp_to_udp", "icmp_unreached_udp_ok", "udp", func(net.IP) *probe.MTRResult {
+			return &probe.MTRResult{ProbeMode: "tcp_443", Hops: []probe.MTRHop{{Hop: 1, IP: "192.168.1.1", Sent: 2, Received: 1, AvgMs: 1}}}
+		}, 2, 1, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cliCalls, tcpCalls int
+			baseCmd := helperCommandContext(tc.cmdMode)
+			deps := execDeps{
+				lookPath:       func(string) (string, error) { return "/usr/bin/traceroute", nil },
+				commandContext: func(ctx context.Context, n string, a ...string) *exec.Cmd { cliCalls++; return baseCmd(ctx, n, a...) },
+				lookupAddr:     noPTR,
+				tcpFallbackFunc: func(_ context.Context, ip net.IP, _ int, _ time.Duration) *probe.MTRResult {
+					tcpCalls++
+					return tc.tcpRes(ip)
+				},
+			}
+			res, err := executeWithDeps(context.Background(), TracerouteParams{Target: "127.0.0.1"}, nil, deps)
+			require.NoError(t, err)
+			assert.Equal(t, []int{tc.wantCLI, tc.wantTCP, tc.wantHops}, []int{cliCalls, tcpCalls, len(res.Hops)})
+			assert.Equal(t, tc.wantMode, res.ProbeMode)
+			assert.True(t, res.ReachedDestination && res.Hops[1].Silent)
+			assert.Equal(t, "Gateway", res.Hops[0].Segment)
+			assert.Equal(t, "Destination", res.Hops[tc.wantHops-1].Segment)
+			assert.Equal(t, 1, res.SilentTransitHops)
+			assert.Equal(t, 0.0, res.DestLossPct)
+		})
+	}
+}
+
+func TestFinalizeTracerouteResultCoPPAndTailFailures(t *testing.T) {
+	unreached := &TracerouteResponse{
+		Target: "198.51.100.1", ResolvedIP: "198.51.100.1", ReachedDestination: false,
+		Hops: []HopResult{
+			{Hop: 1, IP: "192.168.1.1", RTTMs: []float64{1, 1.2}}, {Hop: 2, IP: "*", TimedOut: true},
+			{Hop: 3, IP: "203.0.113.1", RTTMs: []float64{4, 5}}, {Hop: 4, IP: "*", TimedOut: true},
+		},
+	}
+	finalizeTracerouteResult(unreached, net.ParseIP("198.51.100.1"))
+	require.Len(t, unreached.Hops, 4)
+	assert.True(t, unreached.Hops[1].Silent)
+	assert.False(t, unreached.Hops[3].Silent)
+	assert.Equal(t, 1, unreached.SilentTransitHops)
+	assert.Equal(t, 100.0, unreached.DestLossPct)
+}
+
+type delayedCancelCtx struct {
+	context.Context
+	cancelOn int32
+	calls    atomic.Int32
+}
+
+func (c *delayedCancelCtx) Done() <-chan struct{} { return nil }
+func (c *delayedCancelCtx) Err() error {
+	if c.calls.Add(1) >= c.cancelOn {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestExecuteCancelAfterCLIExitAndDestLossEdges(t *testing.T) {
+	noPTR := func(context.Context, string) ([]string, error) { return nil, errors.New("no PTR") }
+	for _, tc := range []struct {
+		name, mode string
+		cancelOn   int32
+	}{
+		{"icmp_cancel_after_clean_exit", "normal", 2},
+		{"udp_cancel_after_clean_exit", "icmp_unreached_udp_ok", 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := execDeps{
+				lookPath:       func(string) (string, error) { return "/usr/bin/traceroute", nil },
+				commandContext: helperCommandContext(tc.mode),
+				lookupAddr:     noPTR,
+			}
+			ctx := &delayedCancelCtx{Context: context.Background(), cancelOn: tc.cancelOn}
+			res, err := executeWithDeps(ctx, TracerouteParams{Target: "127.0.0.1"}, nil, deps)
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Nil(t, res)
+		})
+	}
+
+	assert.Equal(t, 100.0, computeDestLossPct([]HopResult{{RTTMs: []float64{1, 2}}}, false))
+	assert.Equal(t, 0.0, computeDestLossPct(nil, true))
+	assert.Equal(t, 100.0, computeDestLossPct([]HopResult{{IP: "*"}}, true))
+	assert.Equal(t, 50.0, computeDestLossPct([]HopResult{{RTTMs: []float64{1.5}}}, true))
+	assert.Equal(t, 0.0, computeDestLossPct([]HopResult{{RTTMs: []float64{1.0, 2.0}}}, true))
+	assert.Equal(t, 0.0, computeDestLossPct([]HopResult{{RTTMs: []float64{1.0, 2.0, 3.0}}}, true))
 }

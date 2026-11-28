@@ -11,6 +11,7 @@ import (
 	"github.com/FrankXLT/mcp-adv-netutils/internal/ping"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/port_scan"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/probe"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/recipes"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/resolver"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/tls"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/traceroute"
@@ -66,15 +67,19 @@ func formatTracerouteSummary(res *traceroute.TracerouteResponse) string {
 	if n == 0 {
 		return fmt.Sprintf("Route trace to %s returned no responding hops", res.Target)
 	}
-	hopWord := pluralWord(n, "hop", "hops")
-	if res.ReachedDestination {
-		last := res.Hops[n-1]
-		if !last.TimedOut && last.AvgRTTMs > 0 {
-			return fmt.Sprintf("Reached %s in %d %s (%.1f ms final hop)", res.Target, n, hopWord, last.AvgRTTMs)
-		}
-		return fmt.Sprintf("Reached %s in %d %s", res.Target, n, hopWord)
+	hopWord, mode := pluralWord(n, "hop", "hops"), firstNonEmpty(res.ProbeMode, "icmp")
+	if !res.ReachedDestination {
+		return fmt.Sprintf("Traced %d %s toward %s via %s without reaching destination%s", n, hopWord, res.Target, mode, formatSilentTransitClause(res.SilentTransitHops, false))
 	}
-	return fmt.Sprintf("Traced %d %s toward %s without reaching destination", n, hopWord, res.Target)
+	msg := fmt.Sprintf("Reached %s in %d %s via %s", res.Target, n, hopWord, mode)
+	if last := res.Hops[n-1]; !last.TimedOut && last.AvgRTTMs > 0 {
+		msg += fmt.Sprintf(" (%.1f ms final hop)", last.AvgRTTMs)
+	}
+	msg += formatSilentTransitClause(res.SilentTransitHops, true)
+	if res.DestLossPct >= 20 {
+		msg += fmt.Sprintf("; %.0f%% dest loss", res.DestLossPct)
+	}
+	return msg
 }
 
 func formatTLSSummary(res *tls.CheckResult) string {
@@ -186,19 +191,35 @@ func formatMTUSummary(res *probe.MTUProbeResult) string {
 		res.DiscoveredMTU, res.Target, res.WireGuardSafeMTU)
 }
 
+func formatSilentTransitClause(silent int, reached bool) string {
+	if silent <= 0 {
+		return ""
+	}
+	if reached {
+		return fmt.Sprintf("; %d silent transit %s flowing (CoPP)", silent, pluralWord(silent, "router", "routers"))
+	}
+	return fmt.Sprintf("; %d silent transit %s before tail", silent, pluralWord(silent, "hop", "hops"))
+}
+
 func formatMTRSummary(res *probe.MTRResult, hasIssue bool) string {
-	n := len(res.Hops)
+	n, mode, destLoss := len(res.Hops), firstNonEmpty(res.ProbeMode, "icmp"), res.DestLossPct
+	if res.Reached && n > 0 && destLoss == 0 {
+		destLoss = res.Hops[n-1].LossPct
+	}
 	if !res.Reached && n == 0 {
-		return fmt.Sprintf("Path quality trace to %s returned no responding hops", res.Target)
+		return fmt.Sprintf("Path quality trace (%s) to %s returned no responding hops", mode, res.Target)
 	}
 	hopWord := pluralWord(n, "hop", "hops")
-	if hasIssue {
-		return fmt.Sprintf("Traced %d %s to %s — packet loss or high jitter detected", n, hopWord, res.Target)
-	}
 	if !res.Reached {
-		return fmt.Sprintf("Traced %d %s toward %s without reaching destination", n, hopWord, res.Target)
+		return fmt.Sprintf("Traced %d %s toward %s via %s without reaching destination (%.0f%% dest loss)%s",
+			n, hopWord, res.Target, mode, destLoss, formatSilentTransitClause(res.SilentTransitHops, false))
 	}
-	return fmt.Sprintf("Measured %d %s to %s with no packet loss", n, hopWord, res.Target)
+	issueNote := ""
+	if hasIssue {
+		issueNote = " — packet loss or high jitter detected"
+	}
+	return fmt.Sprintf("Reached %s in %d %s via %s (%.0f%% dest loss)%s%s",
+		res.Target, n, hopWord, mode, destLoss, issueNote, formatSilentTransitClause(res.SilentTransitHops, true))
 }
 
 func formatWOLSummary(res *wol.WOLResponse) string {
@@ -212,22 +233,17 @@ func formatWhoisSummary(res *whois.WhoisResponse, fieldCount int) string {
 	if strings.TrimSpace(res.Result) == "" {
 		return fmt.Sprintf("No domain registration record returned for %s", res.Domain)
 	}
-	return fmt.Sprintf("Retrieved domain registration details for %s (%d %s)",
-		res.Domain, fieldCount, pluralWord(fieldCount, "field", "fields"))
+	return fmt.Sprintf("Retrieved domain registration details for %s (%d %s)", res.Domain, fieldCount, pluralWord(fieldCount, "field", "fields"))
 }
 
 func formatMACLookupSummary(res *mac_lookup.MACLookupResult) string {
-	kind := "Physical Hardware"
-	if res.IsLocallyAdministered {
-		kind = "Container / Virtual Adapter"
-	}
+	kind := map[bool]string{false: "Physical Hardware", true: "Container / Virtual Adapter"}[res.IsLocallyAdministered]
 	return fmt.Sprintf("%s belongs to %s (%s)", res.NormalizedMAC, res.Vendor, kind)
 }
 
 func formatARPSweepSummary(res *probe.ARPSweepResult) string {
 	total := res.PhysicalCount + res.VirtualCount
-	return fmt.Sprintf("Found %d active local %s (%d physical hardware, %d containers or VMs)",
-		total, pluralWord(total, "device", "devices"), res.PhysicalCount, res.VirtualCount)
+	return fmt.Sprintf("Found %d active local %s (%d physical hardware, %d containers or VMs)", total, pluralWord(total, "device", "devices"), res.PhysicalCount, res.VirtualCount)
 }
 
 func formatDiscoverSummary(res *probe.DiscoverResult) string {
@@ -237,6 +253,42 @@ func formatDiscoverSummary(res *probe.DiscoverResult) string {
 func formatSNMPSummary(res *probe.SNMPResult) string {
 	return fmt.Sprintf("Read %d switch %s and %d learned MAC %s on %s",
 		len(res.Interfaces), pluralWord(len(res.Interfaces), "port", "ports"),
-		len(res.FDB), pluralWord(len(res.FDB), "entry", "entries"),
-		firstNonEmpty(res.SysName, res.Target, res.ResolvedIP))
+		len(res.FDB), pluralWord(len(res.FDB), "entry", "entries"), firstNonEmpty(res.SysName, res.Target, res.ResolvedIP))
+}
+
+func formatPathAutopsySummary(data *recipes.PathAutopsyData) string {
+	if data == nil {
+		return "Path autopsy returned no diagnostic data"
+	}
+	state := map[bool]string{false: "Unreachable", true: "Reached"}[data.Reached]
+	msg := fmt.Sprintf("%s %s (%s) via %s (%.0f%% dest loss)%s",
+		state, data.Target, firstNonEmpty(data.ResolvedIP, data.Target), firstNonEmpty(data.ProbeMode, "icmp"), data.DestLossPct,
+		formatSilentTransitClause(data.SilentTransitHops, data.Reached))
+	if len(data.LossHops) > 0 {
+		msg += fmt.Sprintf("; loss on %s %v", pluralWord(len(data.LossHops), "hop", "hops"), data.LossHops)
+	}
+	if data.Blackhole {
+		msg += "; PMTUD blackhole detected"
+	}
+	return msg
+}
+
+func formatRenderDigestSummary(data *recipes.DigestData) string {
+	if data == nil {
+		return "No digest data available"
+	}
+	total, passRate, incidents, scope := data.TotalJobs, 0.0, data.IncidentCount, "recent jobs"
+	if ws := data.WindowSummary; ws != nil {
+		total, passRate, incidents = ws.TotalMatching, ws.PassRatePct, ws.IncidentCount
+	} else if total > 0 {
+		passRate = float64(data.OKCount) / float64(total) * 100
+	}
+	if data.Window != "" {
+		scope = data.Window + " window"
+	}
+	if total == 0 {
+		return fmt.Sprintf("No stored jobs matched %s", scope)
+	}
+	return fmt.Sprintf("Audited %d %s in %s — %.1f%% pass rate (%d OK, %d WARN, %d FAIL, %d %s)",
+		total, pluralWord(total, "job", "jobs"), scope, passRate, data.OKCount, data.WarnCount, data.FailCount, incidents, pluralWord(incidents, "incident", "incidents"))
 }

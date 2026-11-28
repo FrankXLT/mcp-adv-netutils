@@ -346,3 +346,93 @@ func TestSnapshotsAndConcurrentReadWriteAndStartReaper(t *testing.T) {
 	time.Sleep(35 * time.Millisecond)
 	cancel()
 }
+
+func TestSummarizeJobsAndFilterMetrics(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openTestStore(t, 32)
+
+	empty, err := s.SummarizeJobs(ctx, JobFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, empty.TotalMatching)
+	assert.Equal(t, 0.0, empty.PassRatePct)
+	assert.Empty(t, empty.TopProblemTargets)
+	assert.Empty(t, empty.ToolBreakdown)
+
+	seed := []JobRecord{
+		{JobID: "j1", ToolName: "ping", Target: "edge.example.net", Source: "manual", Status: "OK", DurationMS: 10, CreatedAt: 1000},
+		{JobID: "j2", ToolName: "ping", Target: "edge.example.net", Source: "cron", Status: "degraded", DurationMS: 20, CreatedAt: 2000, IsIncident: true},
+		{JobID: "j3", ToolName: "http_ping", Target: "edge.example.net", Source: "cron", Status: "critical", DurationMS: 50, CreatedAt: 3000, IsIncident: true},
+		{JobID: "j4", ToolName: "http_ping", Target: "core-gw.example.net", Source: "cron", Status: "FAIL", DurationMS: 40, CreatedAt: 4000, IsIncident: true},
+		{JobID: "j5", ToolName: "dns_query", Target: "core-gw.example.net", Source: "manual", Status: "OK", DurationMS: 30, CreatedAt: 5000},
+		{JobID: "j6", ToolName: "tls_cert", Target: "api.other.org", Source: "cron", Status: "warning", DurationMS: 60, CreatedAt: 6000, IsIncident: true},
+		{JobID: "j7", ToolName: "ping", Target: "core-gw.example.net", Source: "manual", Status: "OK", DurationMS: 5, CreatedAt: 500},
+	}
+	for i := range seed {
+		require.NoError(t, s.SaveJob(ctx, &seed[i]))
+	}
+
+	t.Run("window_aggregates_ignore_limit_and_order_breakdowns", func(t *testing.T) {
+		listed, listErr := s.ListJobs(ctx, JobFilter{Since: 1000, Until: 6000, Limit: 2})
+		require.NoError(t, listErr)
+		require.Len(t, listed, 2)
+
+		sum, sumErr := s.SummarizeJobs(ctx, JobFilter{Since: 1000, Until: 6000, Limit: 2})
+		require.NoError(t, sumErr)
+		assert.Equal(t, 6, sum.TotalMatching)
+		assert.Equal(t, 2, sum.OKCount)
+		assert.Equal(t, 2, sum.WarnCount)
+		assert.Equal(t, 2, sum.FailCount)
+		assert.Equal(t, 4, sum.IncidentCount)
+		assert.InDelta(t, 33.3, sum.PassRatePct, 0.01)
+		assert.InDelta(t, 35.0, sum.AvgDurationMS, 0.01)
+		assert.Equal(t, int64(10), sum.MinDurationMS)
+		assert.Equal(t, int64(60), sum.MaxDurationMS)
+		assert.Equal(t, int64(1000), sum.EarliestCreatedAt)
+		assert.Equal(t, int64(6000), sum.LatestCreatedAt)
+
+		require.Len(t, sum.ToolBreakdown, 4)
+		assert.Equal(t, ToolDigestCount{ToolName: "http_ping", Total: 2, FailCount: 2, AvgDurationMS: 45}, sum.ToolBreakdown[0])
+		assert.Equal(t, ToolDigestCount{ToolName: "ping", Total: 2, OKCount: 1, WarnCount: 1, AvgDurationMS: 15}, sum.ToolBreakdown[1])
+		assert.Equal(t, ToolDigestCount{ToolName: "tls_cert", Total: 1, WarnCount: 1, AvgDurationMS: 60}, sum.ToolBreakdown[2])
+		assert.Equal(t, ToolDigestCount{ToolName: "dns_query", Total: 1, OKCount: 1, AvgDurationMS: 30}, sum.ToolBreakdown[3])
+
+		require.Len(t, sum.TopProblemTargets, 3)
+		assert.Equal(t, TargetProblemCount{Target: "edge.example.net", WarnCount: 1, FailCount: 1, TotalNonOK: 2, LastSeenAt: 3000}, sum.TopProblemTargets[0])
+		assert.Equal(t, TargetProblemCount{Target: "core-gw.example.net", FailCount: 1, TotalNonOK: 1, LastSeenAt: 4000}, sum.TopProblemTargets[1])
+		assert.Equal(t, TargetProblemCount{Target: "api.other.org", WarnCount: 1, TotalNonOK: 1, LastSeenAt: 6000}, sum.TopProblemTargets[2])
+	})
+
+	filterCases := []struct {
+		name                        string
+		filter                      JobFilter
+		wantTotal, wantOK, wantWarn int
+		wantFail                    int
+		wantPassPct                 float64
+	}{
+		{name: "target_contains_case_insensitive", filter: JobFilter{TargetContains: "EXAMPLE.NET", Since: 1000}, wantTotal: 5, wantOK: 2, wantWarn: 1, wantFail: 2, wantPassPct: 40},
+		{name: "target_contains_partial_host", filter: JobFilter{TargetContains: "core-gw"}, wantTotal: 3, wantOK: 2, wantFail: 1, wantPassPct: 66.7},
+		{name: "tool_name_filter", filter: JobFilter{ToolName: "ping"}, wantTotal: 3, wantOK: 2, wantWarn: 1, wantPassPct: 66.7},
+		{name: "status_fail_normalized", filter: JobFilter{Status: "fail"}, wantTotal: 2, wantFail: 2, wantPassPct: 0},
+		{name: "status_warn_normalized", filter: JobFilter{Status: "warn"}, wantTotal: 2, wantWarn: 2, wantPassPct: 0},
+		{name: "status_ok_normalized", filter: JobFilter{Status: "ok"}, wantTotal: 3, wantOK: 3, wantPassPct: 100},
+		{name: "status_exact_fallback", filter: JobFilter{Status: "critical"}, wantTotal: 1, wantFail: 1, wantPassPct: 0},
+		{name: "incidents_only_filter", filter: JobFilter{IncidentsOnly: true}, wantTotal: 4, wantWarn: 2, wantFail: 2, wantPassPct: 0},
+		{name: "empty_matching_window", filter: JobFilter{Since: 9000, Until: 9999}, wantTotal: 0, wantPassPct: 0},
+	}
+	for _, tc := range filterCases {
+		t.Run(tc.name, func(t *testing.T) {
+			listed, listErr := s.ListJobs(ctx, tc.filter)
+			require.NoError(t, listErr)
+			assert.Len(t, listed, tc.wantTotal)
+
+			sum, sumErr := s.SummarizeJobs(ctx, tc.filter)
+			require.NoError(t, sumErr)
+			assert.Equal(t, tc.wantTotal, sum.TotalMatching)
+			assert.Equal(t, tc.wantOK, sum.OKCount)
+			assert.Equal(t, tc.wantWarn, sum.WarnCount)
+			assert.Equal(t, tc.wantFail, sum.FailCount)
+			assert.InDelta(t, tc.wantPassPct, sum.PassRatePct, 0.01)
+		})
+	}
+}

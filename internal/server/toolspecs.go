@@ -217,9 +217,16 @@ func buildStackRecipeTools() []mcp.Tool {
 			mcp.WithNumber("wait_seconds", mcp.Description("Maximum readiness wait seconds; defaults to 15"), mcp.DefaultNumber(15)),
 			mcp.WithString("ports", mcp.Description("Optional TCP ports to verify readiness")),
 		),
-		newTool("render_run_digest", "Render a consolidated severity-sorted digest card across stored diagnostic jobs",
+		newTool("render_run_digest", "Render a consolidated severity-sorted digest card and window summary across stored diagnostic jobs",
 			mcp.WithArray("job_ids", mcp.WithStringItems(), mcp.Description("Optional explicit list of job IDs to summarize")),
-			mcp.WithNumber("limit", mcp.Description("Maximum recent jobs to include when job_ids is omitted")),
+			mcp.WithString("window", mcp.Description("Optional relative lookback window: '1h', '6h', '24h', '7d', or '30d' (alternative to job_ids or explicit since/until)")),
+			mcp.WithString("since", mcp.Description("Optional inclusive start timestamp filter (RFC3339 or Unix seconds)")),
+			mcp.WithString("until", mcp.Description("Optional inclusive end timestamp filter (RFC3339 or Unix seconds)")),
+			mcp.WithString("target", mcp.Description("Optional target host/IP substring filter")),
+			mcp.WithString("tool_name", mcp.Description("Optional exact MCP tool or recipe name filter")),
+			mcp.WithString("status", mcp.Description("Optional status filter: 'OK', 'WARN', or 'FAIL'")),
+			mcp.WithBoolean("incidents_only", mcp.Description("When true, include only WARN or FAIL jobs")),
+			mcp.WithNumber("limit", mcp.Description("Maximum matching jobs to return in detail (default 25, max 100); window_summary covers all matching jobs")),
 		),
 	}
 }

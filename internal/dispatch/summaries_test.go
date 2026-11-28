@@ -9,7 +9,9 @@ import (
 	"github.com/FrankXLT/mcp-adv-netutils/internal/ping"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/port_scan"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/probe"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/recipes"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/resolver"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/store"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/tls"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/traceroute"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/whois"
@@ -43,7 +45,35 @@ func TestPlainSentenceSummaries(t *testing.T) {
 	trOK := buildTracerouteExec(&traceroute.TracerouteResponse{
 		Target: "1.1.1.1", ReachedDestination: true, Hops: []traceroute.HopResult{{Hop: 1, IP: "1.1.1.1", AvgRTTMs: 4.5}},
 	}, 10)
-	assert.Equal(t, "Reached 1.1.1.1 in 1 hop (4.5 ms final hop)", trOK.Summary)
+	assert.Equal(t, "Reached 1.1.1.1 in 1 hop via icmp (4.5 ms final hop)", trOK.Summary)
+
+	trCoPP := formatTracerouteSummary(&traceroute.TracerouteResponse{
+		Target: "1.1.1.1", ProbeMode: "tcp_443", ReachedDestination: true, SilentTransitHops: 3,
+		Hops: []traceroute.HopResult{{Hop: 1, IP: "*", Silent: true}, {Hop: 2, IP: "1.1.1.1", AvgRTTMs: 9.2}},
+	})
+	assert.Equal(t, "Reached 1.1.1.1 in 2 hops via tcp_443 (9.2 ms final hop); 3 silent transit routers flowing (CoPP)", trCoPP)
+
+	mtrCoPP := formatMTRSummary(&probe.MTRResult{
+		Target: "1.1.1.1", ProbeMode: "tcp_443", Reached: true, SilentTransitHops: 2, DestLossPct: 0,
+		Hops: []probe.MTRHop{{Hop: 1, IP: "*", Silent: true}, {Hop: 2, IP: "1.1.1.1", LossPct: 0}},
+	}, false)
+	assert.Equal(t, "Reached 1.1.1.1 in 2 hops via tcp_443 (0% dest loss); 2 silent transit routers flowing (CoPP)", mtrCoPP)
+
+	paCoPP := formatPathAutopsySummary(&recipes.PathAutopsyData{
+		Target: "one.one.one.one", ResolvedIP: "1.1.1.1", ProbeMode: "tcp_443", Reached: true, SilentTransitHops: 4, DestLossPct: 0,
+	})
+	assert.Equal(t, "Reached one.one.one.one (1.1.1.1) via tcp_443 (0% dest loss); 4 silent transit routers flowing (CoPP)", paCoPP)
+
+	paLoss := formatPathAutopsySummary(&recipes.PathAutopsyData{
+		Target: "10.0.0.99", ResolvedIP: "10.0.0.99", ProbeMode: "icmp", Reached: true, DestLossPct: 25, LossHops: []int{3}, Blackhole: true,
+	})
+	assert.Equal(t, "Reached 10.0.0.99 (10.0.0.99) via icmp (25% dest loss); loss on hop [3]; PMTUD blackhole detected", paLoss)
+
+	digestSum := formatRenderDigestSummary(&recipes.DigestData{
+		TotalJobs: 5, OKCount: 15, WarnCount: 3, FailCount: 2, IncidentCount: 2, Window: "24h",
+		WindowSummary: &store.JobWindowSummary{TotalMatching: 20, PassRatePct: 75.0, IncidentCount: 2},
+	})
+	assert.Equal(t, "Audited 20 jobs in 24h window — 75.0% pass rate (15 OK, 3 WARN, 2 FAIL, 2 incidents)", digestSum)
 
 	tlsOK := buildTLSExec(&tls.CheckResult{Domain: "api.example.com", Port: 443, TLSVersion: "TLSv1.3", ChainValid: true, PeerCertificates: []tls.CertificateInfo{{ExpiresInDays: 74}}}, 8)
 	assert.Equal(t, "Valid TLSv1.3 certificate for api.example.com — expires in 74 days", tlsOK.Summary)

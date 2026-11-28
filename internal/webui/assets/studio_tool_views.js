@@ -120,15 +120,31 @@
     return msg ? capWord(String(msg).toLowerCase()) : "OK";
   }
 
-  const fmtWhiskerMs = (lossPct, raw) => {
-    const val = Number(raw);
-    return lossPct >= 100 || !(val > 0) ? "—" : val.toFixed(2);
+  const pill = (text, state) => ({ pill: String(text), state: state || "nominal" });
+  const fmtWhiskerMs = (lossPct, raw) => { const val = Number(raw); return lossPct >= 100 || !(val > 0) ? "—" : val.toFixed(2); };
+  const isSilentHop = (h, idx, hops, reachedAny) => {
+    if (!h) return false;
+    if (h.silent === true) return true;
+    const lp = Number(h.loss_pct ?? h.lossPct ?? h.loss ?? 0), avg = Number(h.avg_ms ?? h.avg_rtt_ms ?? h.avgMs ?? 0);
+    const zeroReply = Boolean(h.timed_out) || !h.ip || h.ip === "*" || (lp >= 100 && !(avg > 0));
+    const downstream = reachedAny || hops.slice(idx + 1).some((nh) => nh && !nh.silent && !nh.timed_out && nh.ip && nh.ip !== "*" && Number(nh.loss_pct ?? nh.lossPct ?? 0) < 100);
+    return Boolean(zeroReply && downstream);
   };
+  const hopLossPill = (lp, silent) => (silent ? pill("Silent transit (*)", "muted") : lp >= 20 ? pill(lp.toFixed(1) + "% loss", "fault") : lp > 0 ? pill(lp.toFixed(1) + "% loss", "warn") : pill("0.0% loss", "ok"));
+  const traceStatusPill = (h, silent) => (silent ? pill("Silent transit (*)", "muted") : h.timed_out ? pill("Timed Out", "fault") : pill("Reached", "ok"));
+  const mtrHopTable = (hops, reachedAny) => tbl(["Hop", "Address", "Hostname", "Loss / State", "Avg (ms)", "Best (ms)", "Worst (ms)", "Jitter (ms)"], hops.map((h, idx) => {
+    const lp = Number(h.loss_pct || 0), silent = isSilentHop(h, idx, hops, reachedAny);
+    return [String(h.hop), h.ip || "*", h.hostname || "—", hopLossPill(lp, silent), silent ? "—" : fmtWhiskerMs(lp, h.avg_ms), silent ? "—" : fmtWhiskerMs(lp, h.best_ms), silent ? "—" : fmtWhiskerMs(lp, h.worst_ms), silent ? "—" : fmtWhiskerMs(lp, h.stdev_ms)];
+  }));
+  const traceHopTable = (hops, reachedAny, deps) => tbl(["Hop", "Address", "Hostname", "Average RTT", "Status"], hops.map((h, idx) => {
+    const silent = isSilentHop(h, idx, hops, reachedAny);
+    return [String(h.hop), h.ip || "*", h.hostname || "—", (silent || h.timed_out) ? "—" : fmtMs(h.avg_rtt_ms, deps), traceStatusPill(h, silent)];
+  }));
 
-  const whiskersTable = (run) => tbl(["Segment / Hop", "Min (ms)", "Avg (ms)", "Max (ms)", "Loss (%)"],
-    toArr(run.whiskers).map((w) => {
-      const lp = Number(w.lossPct ?? w.loss ?? 0);
-      return [w.label || "—", fmtWhiskerMs(lp, w.minMs ?? w.min), fmtWhiskerMs(lp, w.avgMs ?? w.avg), fmtWhiskerMs(lp, w.maxMs ?? w.max), lp.toFixed(1)];
+  const whiskersTable = (run) => tbl(["Segment / Hop", "Min (ms)", "Avg (ms)", "Max (ms)", "Loss / State"],
+    toArr(run.whiskers).map((w, idx, arr) => {
+      const lp = Number(w.lossPct ?? w.loss ?? 0), silent = Boolean(w.silent) || (lp >= 100 && !(Number(w.avgMs ?? w.avg ?? 0) > 0) && /\(\*\)|:\s*\*\s*$|^\s*\*\s*$/.test(String(w.label || "")) && arr.slice(idx + 1).some((nw) => Number(nw.lossPct ?? nw.loss ?? 0) < 100));
+      return [w.label || "—", silent ? "—" : fmtWhiskerMs(lp, w.minMs ?? w.min), silent ? "—" : fmtWhiskerMs(lp, w.avgMs ?? w.avg), silent ? "—" : fmtWhiskerMs(lp, w.maxMs ?? w.max), silent ? pill("Silent transit (*)", "muted") : lp.toFixed(1) + "%"];
     }));
 
   const waterfallTable = (run) => tbl(["Phase", "Start (ms)", "Duration (ms)", "End (ms)"],
@@ -275,16 +291,26 @@
     return view(wf.length ? [["Target", run.target || "—"], ["Probe Steps", String(wf.length)], ["Status", run.status || "OK"]] : [], waterfallTable(run), null);
   }
 
+  function traceFacts(base, d, hops, reached, wh) {
+    const silent = d.silent_transit_hops ?? hops.filter((h, i) => isSilentHop(h, i, hops, reached)).length;
+    const last = hops.slice().reverse().find((h) => h && !h.timed_out && h.ip && h.ip !== "*") || hops[hops.length - 1];
+    const dLoss = d.dest_loss_pct ?? (last && last.loss_pct != null ? Number(last.loss_pct) : (last && last.timed_out ? 100 : undefined));
+    const out = base.concat([
+      ["Probe Mode", pill(d.probe_mode || "ICMP", "nominal")],
+      ["Reached", pill(yesNo(reached), reached ? "ok" : "warn")],
+      ["Silent Transit Hops", pill(String(silent), silent > 0 ? "muted" : "nominal")]
+    ]);
+    if (dLoss !== undefined) out.push(["Destination Loss %", pill(Number(dLoss).toFixed(1) + "%", Number(dLoss) >= 20 ? "fault" : Number(dLoss) > 0 ? "warn" : "ok")]);
+    else if (!hops.length && wh.length) out.push(["Hops", String(wh.length)]);
+    return out;
+  }
+
   function buildMtrView(run) {
-    const d = run.data || {}, hops = toArr(d.hops), wh = toArr(run.whiskers);
+    const d = run.data || {}, hops = toArr(d.hops), wh = toArr(run.whiskers), reached = Boolean(d.reached);
     if (hops.length || d.cycles !== undefined) {
-      return view([["Target", d.target || run.target || "—"], ["Cycles", String(d.cycles ?? "—")], ["Hops", String(hops.length)], ["Destination Reached", yesNo(Boolean(d.reached))], ["Probe Mode", d.probe_mode || "—"]],
-        tbl(["Hop", "Address", "Hostname", "Loss (%)", "Avg (ms)", "Best (ms)", "Worst (ms)", "Jitter (ms)"], hops.map((h) => {
-          const lp = Number(h.loss_pct || 0);
-          return [String(h.hop), h.ip || "*", h.hostname || "—", lp.toFixed(1) + "%", fmtWhiskerMs(lp, h.avg_ms), fmtWhiskerMs(lp, h.best_ms), fmtWhiskerMs(lp, h.worst_ms), fmtWhiskerMs(lp, h.stdev_ms)];
-        })) || whiskersTable(run), null);
+      return view(traceFacts([["Target", d.target || run.target || "—"], ["Cycles", String(d.cycles ?? "—")], ["Hops", String(hops.length)]], d, hops, reached, wh), mtrHopTable(hops, reached) || whiskersTable(run), null);
     }
-    return view(wh.length ? [["Target", run.target || "—"], ["Hops", String(wh.length)], ["Status", run.status || "OK"]] : [], whiskersTable(run), null);
+    return view(wh.length ? traceFacts([["Target", run.target || "—"]], d, hops, Boolean(d.reached ?? String(run.status).toUpperCase() === "OK"), wh) : [], whiskersTable(run), null);
   }
 
   function buildDiscoverView(run) {
@@ -305,18 +331,28 @@
         tbl(["Sequence", "Round-Trip", "TTL", "Status"], results.map((r) => [String(r.sequence), r.success ? fmtMs(r.response_time_ms, deps) : "—", r.ttl ? String(r.ttl) : "—", r.success ? "Reply" : (r.error || "Timed Out")])) || whiskersTable(run), null);
     }
     if (!w0) return view([], whiskersTable(run), null);
-    const lossPct = Number(w0.lossPct ?? w0.loss ?? 0), avgVal = w0.avgMs ?? w0.avg;
-    const noRtt = lossPct >= 100 || avgVal == null || (Number(avgVal) <= 0 && lossPct > 0);
+    const lossPct = Number(w0.lossPct ?? w0.loss ?? 0), avgVal = w0.avgMs ?? w0.avg, noRtt = lossPct >= 100 || avgVal == null || (Number(avgVal) <= 0 && lossPct > 0);
     return view([["Target", run.target || w0.label || "—"], ["Average RTT", noRtt ? "—" : fmtMs(avgVal, deps)], ["Packet Loss", lossPct.toFixed(1) + "%"]], whiskersTable(run), null);
   }
 
   function buildTracerouteView(run, deps) {
-    const d = run.data || {}, hops = toArr(d.hops), wh = toArr(run.whiskers);
+    const d = run.data || {}, hops = toArr(d.hops), wh = toArr(run.whiskers), reached = Boolean(d.reached_destination ?? d.reached);
     if (hops.length || d.reached_destination !== undefined) {
-      return view([["Target", d.target || run.target || "—"], ["Resolved IP", d.resolved_ip || "—"], ["Hops", String(hops.length)], ["Reached Destination", yesNo(Boolean(d.reached_destination))]],
-        tbl(["Hop", "Address", "Hostname", "Average RTT", "Status"], hops.map((h) => [String(h.hop), h.ip || "*", h.hostname || "—", h.timed_out ? "—" : fmtMs(h.avg_rtt_ms, deps), h.timed_out ? "Timed Out" : "Reached"])) || whiskersTable(run), null);
+      return view(traceFacts([["Target", d.target || run.target || "—"], ["Resolved IP", d.resolved_ip || "—"], ["Hops", String(hops.length)]], d, hops, reached, wh), traceHopTable(hops, reached, deps) || whiskersTable(run), null);
     }
-    return view(wh.length ? [["Target", run.target || "—"], ["Hops", String(wh.length)], ["Status", run.status || "OK"]] : [], whiskersTable(run), null);
+    return view(wh.length ? traceFacts([["Target", run.target || "—"]], d, hops, Boolean(d.reached_destination ?? String(run.status).toUpperCase() === "OK"), wh) : [], whiskersTable(run), null);
+  }
+
+  function buildPathAutopsyView(run, deps) {
+    const d = run.data || {}, mtr = d.mtr || {}, tr = d.traceroute || {}, mtu = d.mtu || {}, wh = toArr(run.whiskers);
+    const mtrHops = toArr(mtr.hops), trHops = toArr(tr.hops), hops = mtrHops.length ? mtrHops : (trHops.length ? trHops : toArr(d.hops));
+    const reached = Boolean(d.reached ?? d.reached_destination ?? mtr.reached ?? tr.reached_destination ?? (String(run.status).toUpperCase() !== "FAIL"));
+    const probeMode = d.probe_mode || mtr.probe_mode || tr.probe_mode || mtu.probe_mode || "ICMP";
+    const pathMtu = d.path_mtu ?? d.discovered_mtu ?? mtu.discovered_mtu;
+    const meta = { probe_mode: probeMode, silent_transit_hops: d.silent_transit_hops ?? mtr.silent_transit_hops ?? tr.silent_transit_hops, dest_loss_pct: d.dest_loss_pct ?? mtr.dest_loss_pct ?? tr.dest_loss_pct };
+    const base = pathMtu != null ? [["Path MTU", String(pathMtu) + " B"]] : [];
+    const tblData = mtrHops.length ? mtrHopTable(mtrHops, reached) : (hops.length && hops[0].avg_ms !== undefined ? mtrHopTable(hops, reached) : (hops.length ? traceHopTable(hops, reached, deps) : null));
+    return view(traceFacts(base, meta, hops, reached, wh), tblData || whiskersTable(run), null);
   }
 
   function buildHttpPingView(run, deps) {
@@ -384,46 +420,32 @@
   }
 
   function buildMacLookupView(run) {
-    const d = run.data || {}, mac = d.normalized_mac || d.mac || run.target || "—", assign = formatMacAssignment(d);
-    const facts = [["MAC Address", mac], ["Vendor", d.vendor || "Unknown"], ["Assignment", assign]];
+    const d = run.data || {}, mac = d.normalized_mac || d.mac || run.target || "—", facts = [["MAC Address", mac], ["Vendor", d.vendor || "Unknown"], ["Assignment", formatMacAssignment(d)]];
     if (d.oui) facts.push(["OUI Prefix", d.oui]);
     return view(facts, tbl(["Property", "Value"], facts), null);
   }
-
   function buildWolView(run) {
     const d = run.data || {}, mac = d.normalized_mac || d.mac || run.target || "—", bcast = d.broadcast_ip || "255.255.255.255", port = String(d.port ?? 9), sent = yesNo(d.success !== undefined ? d.success : String(run.status || "OK").toUpperCase() === "OK");
-    return view([["Target MAC", mac], ["Broadcast IP", bcast], ["UDP Port", port], ["Packet Sent", sent]],
-      tbl(["Property", "Value"], [["Target MAC", mac], ["Broadcast IP", bcast], ["UDP Port", port], ["Packet Sent", sent], ["Outcome", d.message || run.summary || "Magic packet sent"]]), null);
+    return view([["Target MAC", mac], ["Broadcast IP", bcast], ["UDP Port", port], ["Packet Sent", sent]], tbl(["Property", "Value"], [["Target MAC", mac], ["Broadcast IP", bcast], ["UDP Port", port], ["Packet Sent", sent], ["Outcome", d.message || run.summary || "Magic packet sent"]]), null);
   }
-
   function buildDiffHttpView(run, deps) {
     const d = run.data || {}, eps = toArr(d.endpoints).filter((e) => e && typeof e === "object");
     if (eps.length <= 1) return view([], null, null);
     return view([], tbl(["URL", "Status", "DNS", "TCP", "TLS", "First Byte", "Total", "Issuer"], eps.map((e) => [
-      e.url || "—",
-      e.status_code ? (String(e.status_code) + " " + String(e.status || "OK")) : String(e.status || "FAIL"),
-      e.dns_ms > 0 ? fmtMs(e.dns_ms, deps) : "—",
-      e.tcp_ms > 0 ? fmtMs(e.tcp_ms, deps) : "—",
-      e.tls_ms > 0 ? fmtMs(e.tls_ms, deps) : "—",
-      e.ttfb_ms > 0 ? fmtMs(e.ttfb_ms, deps) : "—",
-      e.total_ms > 0 ? fmtMs(e.total_ms, deps) : "—",
-      fmtCertName(e.issuer) || "—"
+      e.url || "—", e.status_code ? (String(e.status_code) + " " + String(e.status || "OK")) : String(e.status || "FAIL"),
+      e.dns_ms > 0 ? fmtMs(e.dns_ms, deps) : "—", e.tcp_ms > 0 ? fmtMs(e.tcp_ms, deps) : "—", e.tls_ms > 0 ? fmtMs(e.tls_ms, deps) : "—",
+      e.ttfb_ms > 0 ? fmtMs(e.ttfb_ms, deps) : "—", e.total_ms > 0 ? fmtMs(e.total_ms, deps) : "—", fmtCertName(e.issuer) || "—"
     ])), null);
   }
-
   function buildRecipeView(run, deps) {
     const d = run.data && typeof run.data === "object" ? run.data : null, hasChart = Boolean(toArr(run.whiskers).length || toArr(run.waterfall).length || toArr(run.dns_comparisons).length);
     if (!d) return view();
     if (run.tool === "recipe_host_card") {
       const facts = [], mac = d.mac || (d.arp && d.arp.mac);
-      if (d.resolved_ip) facts.push(["Resolved IP", d.resolved_ip]);
-      if (mac) facts.push(["MAC Address", mac]);
+      if (d.resolved_ip) facts.push(["Resolved IP", d.resolved_ip]); if (mac) facts.push(["MAC Address", mac]);
       if (d.open_ports) facts.push(["Open Ports", formatValueHuman(d.open_ports)]);
       else if (d.ports && Array.isArray(d.ports.ports)) facts.push(["Open Ports", d.ports.ports.filter((p) => p.state === "open").map((p) => p.port + (p.service ? "/" + p.service : "")).join(", ") || "None"]);
-      if (d.ping) {
-        const noReply = Number(d.ping.packets_received ?? 1) === 0 || d.ping.avg_rtt_ms == null;
-        facts.push(["Ping Average", noReply ? "—" : fmtMs(d.ping.avg_rtt_ms, deps)]);
-      }
+      if (d.ping) { const noReply = Number(d.ping.packets_received ?? 1) === 0 || d.ping.avg_rtt_ms == null; facts.push(["Ping Average", noReply ? "—" : fmtMs(d.ping.avg_rtt_ms, deps)]); }
       return view(facts, hasChart ? null : tbl(["Metric", "Value"], facts), null);
     }
     if (run.tool === "recipe_wake_verify") {
@@ -441,16 +463,12 @@
     if (hasChart || run.tls_health || run.snapshot_diff || run.added || run.removed || run.changed || d.added || d.removed || d.changed) return view();
     return buildFallbackView(run);
   }
-
   function buildFallbackView(run) {
     const d = run && run.data && typeof run.data === "object" && !Array.isArray(run.data) ? run.data : null;
-    if (!d) return view();
-    const hasRich = Boolean(toArr(run.whiskers).length || toArr(run.waterfall).length || toArr(run.dns_comparisons).length || run.tls_health);
-    if (hasRich) return view();
+    if (!d || Boolean(toArr(run.whiskers).length || toArr(run.waterfall).length || toArr(run.dns_comparisons).length || run.tls_health)) return view();
     const rows = Object.keys(d).slice(0, 16).map((k) => [humanizeKey(k), formatValueHuman(d[k])]);
     return rows.length ? view(rows.slice(0, 8), tbl(["Metric", "Value"], rows), null) : view();
   }
-
   const TOOL_BUILDERS = {
     local_dns_query: buildDnsQueryView, remote_dns_query: buildDnsQueryView, resolve_hostname: buildResolveView,
     dns_reverse_batch: buildReverseBatchView, whois_query: buildWhoisView, tcp_port_scan: buildPortScanView,
@@ -459,15 +477,12 @@
     http_ping: buildHttpPingView, split_dns_audit: buildSplitDnsView, arp_neighbor_sweep: buildArpSweepView,
     snmp_switch_port: buildSnmpView, mac_vendor_lookup: buildMacLookupView, wol_wake: buildWolView,
     recipe_diff_http: buildDiffHttpView, recipe_diff_ping: buildRecipeView, recipe_diff_dns: buildRecipeView,
-    recipe_diff_snapshot: buildRecipeView, render_run_digest: buildRecipeView,
+    recipe_path_autopsy: buildPathAutopsyView, recipe_diff_snapshot: buildRecipeView, render_run_digest: buildRecipeView,
     recipe_host_card: buildRecipeView, recipe_wake_verify: buildRecipeView, recipe_lan_radar: buildRecipeView
   };
-
   function buildToolView(run, deps) {
-    const r = run || {}, builder = TOOL_BUILDERS[r.tool];
-    const out = builder ? builder(r, deps) : buildFallbackView(r);
+    const r = run || {}, builder = TOOL_BUILDERS[r.tool], out = builder ? builder(r, deps) : buildFallbackView(r);
     return view(out && out.summaryFacts, out && out.table, out && out.chart);
   }
-
   globalScope.NetutilsToolViews = { buildToolView, humanizeKey, formatValueHuman, fmtCertName, formatMacAssignment };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -13,6 +13,7 @@ import (
 
 	"github.com/FrankXLT/mcp-adv-netutils/internal/ascii"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/cronmon"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/recipes"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/store"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/transport"
@@ -533,4 +534,51 @@ func TestDurationAndElapsedMSRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(7), fallbackOut.DurationMS)
 	assert.Equal(t, 7.0, fallbackOut.ElapsedMS)
+}
+
+func TestDispatchRenderRunDigestWindowAndFilters(t *testing.T) {
+	t.Parallel()
+	ctx, st, now := context.Background(), openTestStore(t), time.Now().UTC().Unix()
+	for _, r := range []*store.JobRecord{
+		{JobID: "j1", ToolName: "ping", Target: "10.0.0.1", Source: "manual", Status: "OK", Summary: "ok", DurationMS: 10, CreatedAt: now - 60},
+		{JobID: "j2", ToolName: "ping", Target: "10.0.0.2", Source: "cron", Status: "WARN", Summary: "jitter", DurationMS: 30, CreatedAt: now - 3600},
+		{JobID: "j3", ToolName: "diff_ping", Target: "10.0.0.99", Source: "cron", Status: "FAIL", Summary: "down", DurationMS: 90, CreatedAt: now - 7200, IsIncident: true},
+		{JobID: "j_old", ToolName: "ping", Target: "10.0.0.99", Source: "cron", Status: "FAIL", Summary: "old", DurationMS: 50, CreatedAt: now - 48*3600, IsIncident: true},
+	} {
+		require.NoError(t, st.SaveJob(ctx, r))
+	}
+	d, err := New(Config{Store: st})
+	require.NoError(t, err)
+
+	out, err := d.Dispatch(ctx, Request{Tool: "render_run_digest", Args: map[string]any{"window": "24h", "target": "10.0.0.", "limit": 2}, Style: ascii.StyleJSON})
+	require.NoError(t, err)
+	assert.Equal(t, "FAIL", out.Status)
+	assertASCIIWidths(t, out)
+	assert.Contains(t, out.Output, `"window_summary"`)
+	data, ok := out.Data.(recipes.DigestData)
+	require.True(t, ok)
+	require.NotNil(t, data.WindowSummary)
+	assert.Equal(t, "24h", data.Window)
+	assert.Equal(t, 3, data.WindowSummary.TotalMatching)
+	assert.Equal(t, 2, data.TotalJobs)
+
+	out2, err := d.Dispatch(ctx, Request{Tool: "render_run_digest", Args: map[string]any{"window": "24h", "target": "10.0.0.99", "status": "FAIL", "incidents_only": true, "limit": 5}})
+	require.NoError(t, err)
+	assertASCIIWidths(t, out2)
+	data2, ok := out2.Data.(recipes.DigestData)
+	require.True(t, ok)
+	require.NotNil(t, data2.WindowSummary)
+	assert.Equal(t, 1, data2.WindowSummary.TotalMatching)
+	assert.Equal(t, 1, data2.IncidentCount)
+	assert.Equal(t, "j3", data2.Jobs[0].JobID)
+
+	out3, err := d.Dispatch(ctx, Request{Tool: "render_run_digest", Args: map[string]any{"window": "24h", "target": "10.0.0.", "limit": 2}, Style: ascii.StyleJSON})
+	require.NoError(t, err)
+	data3, ok := out3.Data.(recipes.DigestData)
+	require.True(t, ok)
+	require.NotNil(t, data3.WindowSummary)
+	assert.Equal(t, 3, data3.WindowSummary.TotalMatching)
+	archivedDigests, err := st.ListJobs(ctx, store.JobFilter{ToolName: "render_run_digest"})
+	require.NoError(t, err)
+	assert.Empty(t, archivedDigests)
 }

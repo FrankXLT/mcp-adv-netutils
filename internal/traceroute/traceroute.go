@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FrankXLT/mcp-adv-netutils/internal/probe"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/response"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/utils"
@@ -22,10 +23,10 @@ import (
 )
 
 const (
-	defaultMaxHops       = 15
+	defaultMaxHops       = 20
 	maxAllowedHops       = 30
-	defaultTimeoutSec    = 2
-	maxAllowedTimeoutSec = 10
+	defaultTimeoutSec    = 1
+	maxAllowedTimeoutSec = 5
 	ptrConcurrencyLimit  = 8
 	ptrTimeout           = time.Second
 )
@@ -42,6 +43,8 @@ type HopResult struct {
 	Hop      int       `json:"hop"`
 	IP       string    `json:"ip"`
 	Hostname string    `json:"hostname,omitempty"`
+	Segment  string    `json:"segment,omitempty"`
+	Silent   bool      `json:"silent,omitempty"`
 	RTTMs    []float64 `json:"rtt_ms"`
 	AvgRTTMs float64   `json:"avg_rtt_ms"`
 	TimedOut bool      `json:"timed_out"`
@@ -51,17 +54,21 @@ type HopResult struct {
 type TracerouteResponse struct {
 	Target             string      `json:"target"`
 	ResolvedIP         string      `json:"resolved_ip,omitempty"`
+	ProbeMode          string      `json:"probe_mode,omitempty"`
 	MaxHops            int         `json:"max_hops"`
+	SilentTransitHops  int         `json:"silent_transit_hops,omitempty"`
+	DestLossPct        float64     `json:"dest_loss_pct"`
 	Hops               []HopResult `json:"hops"`
 	ReachedDestination bool        `json:"reached_destination"`
 	Timestamp          string      `json:"timestamp"`
 }
 
 type execDeps struct {
-	lookPath       func(file string) (string, error)
-	commandContext func(ctx context.Context, name string, arg ...string) *exec.Cmd
-	lookupIPAddr   func(ctx context.Context, host string) ([]net.IPAddr, error)
-	lookupAddr     func(ctx context.Context, addr string) ([]string, error)
+	lookPath        func(file string) (string, error)
+	commandContext  func(ctx context.Context, name string, arg ...string) *exec.Cmd
+	lookupIPAddr    func(ctx context.Context, host string) ([]net.IPAddr, error)
+	lookupAddr      func(ctx context.Context, addr string) ([]string, error)
+	tcpFallbackFunc func(ctx context.Context, ip net.IP, maxHops int, timeout time.Duration) *probe.MTRResult
 }
 
 func defaultDeps() execDeps {
@@ -70,6 +77,9 @@ func defaultDeps() execDeps {
 		commandContext: exec.CommandContext,
 		lookupIPAddr:   net.DefaultResolver.LookupIPAddr,
 		lookupAddr:     net.DefaultResolver.LookupAddr,
+		tcpFallbackFunc: func(ctx context.Context, ip net.IP, maxHops int, timeout time.Duration) *probe.MTRResult {
+			return probe.ExecuteTCPTraceroute(ctx, ip, maxHops, defaultProbesPerHop, timeout)
+		},
 	}
 }
 
@@ -116,69 +126,29 @@ func executeWithDeps(ctx context.Context, params TracerouteParams, guard *securi
 	}
 
 	maxHops := defaultMaxHops
-	if params.MaxHops != nil && *params.MaxHops > 0 && *params.MaxHops <= maxAllowedHops {
-		maxHops = *params.MaxHops
+	if params.MaxHops != nil && *params.MaxHops > 0 {
+		maxHops = min(*params.MaxHops, maxAllowedHops)
 	}
 
 	timeoutSec := defaultTimeoutSec
-	if params.Timeout != nil && *params.Timeout > 0 && *params.Timeout <= maxAllowedTimeoutSec {
-		timeoutSec = *params.Timeout
+	if params.Timeout != nil {
+		timeoutSec = min(max(*params.Timeout, 1), maxAllowedTimeoutSec)
 	}
 
-	cmdPath, err := deps.lookPath("traceroute")
+	resp, err := executeProbeCascade(ctx, target, resolvedIP, maxHops, timeoutSec, deps)
 	if err != nil {
-		return nil, fmt.Errorf("traceroute utility not found in system PATH: %w", err)
-	}
-
-	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(maxHops*timeoutSec+5)*time.Second)
-	defer cancel()
-
-	targetArg := target
-	if resolvedIP != "" {
-		targetArg = resolvedIP
-	}
-
-	cmd := deps.commandContext(
-		cmdCtx,
-		cmdPath,
-		"-n",
-		"-w", strconv.Itoa(timeoutSec),
-		"-m", strconv.Itoa(maxHops),
-		"--",
-		targetArg,
-	)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to execute traceroute: %w", err)
-	}
-
-	hops, reached, scanErr := parseTracerouteOutput(stdout, target, resolvedIP)
-	waitErr := cmd.Wait()
-
-	if scanErr != nil {
-		return nil, fmt.Errorf("failed reading traceroute output: %w", scanErr)
-	}
-	if err := evaluateWaitError(ctx, cmdCtx, waitErr, len(hops)); err != nil {
 		return nil, err
 	}
-
-	if err := resolveHopHostnames(ctx, hops, deps.lookupAddr); err != nil {
-		return nil, err
+	if resp == nil {
+		return nil, errors.New("traceroute failed: nil response")
 	}
 
-	return &TracerouteResponse{
-		Target:             target,
-		ResolvedIP:         resolvedIP,
-		MaxHops:            maxHops,
-		Hops:               hops,
-		ReachedDestination: reached,
-		Timestamp:          time.Now().UTC().Format(time.RFC3339),
-	}, nil
+	finalizeTracerouteResult(resp, net.ParseIP(resolvedIP))
+
+	if err := resolveHopHostnames(ctx, resp.Hops, deps.lookupAddr); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func validateAndResolveTarget(
@@ -202,10 +172,10 @@ func validateAndResolveTarget(
 		if valErr != nil {
 			return "", "", fmt.Errorf("target validation failed: %w", valErr)
 		}
-		if len(ips) > 0 {
-			return target, selectPreferredIP(ips).String(), nil
+		if len(ips) == 0 {
+			return "", "", fmt.Errorf("traceroute target %q returned no allowed IPs", target)
 		}
-		return target, "", nil
+		return target, selectPreferredIP(ips).String(), nil
 	}
 
 	if addr, parseErr := netip.ParseAddr(target); parseErr == nil {
@@ -303,22 +273,6 @@ func isNumericIPLabel(label string) bool {
 		}
 	}
 	return true
-}
-
-func evaluateWaitError(ctx, cmdCtx context.Context, waitErr error, hopCount int) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		if waitErr != nil {
-			return fmt.Errorf("traceroute canceled: %w", waitErr)
-		}
-		return fmt.Errorf("traceroute canceled: %w", ctxErr)
-	}
-	if waitErr == nil {
-		return nil
-	}
-	if cmdCtx.Err() != nil || hopCount == 0 {
-		return fmt.Errorf("traceroute failed: %w", waitErr)
-	}
-	return nil
 }
 
 func parseTracerouteOutput(r io.Reader, target, resolvedIP string) ([]HopResult, bool, error) {
@@ -437,7 +391,7 @@ func resolveHopHostnames(
 	g.SetLimit(ptrConcurrencyLimit)
 
 	for i := range hops {
-		if hops[i].TimedOut || hops[i].IP == "" || hops[i].IP == "*" {
+		if hops[i].TimedOut || hops[i].IP == "" || hops[i].IP == "*" || hops[i].Hostname != "" {
 			continue
 		}
 		idx := i

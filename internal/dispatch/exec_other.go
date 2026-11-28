@@ -133,7 +133,17 @@ func (d *Dispatcher) runRecipeTool(ctx context.Context, tool string, r *argReade
 		}
 	default:
 		target = r.str("target")
-		p := recipes.RenderDigestParams{JobIDs: r.strs("job_ids"), Limit: r.i("limit")}
+		p := recipes.RenderDigestParams{
+			JobIDs:        r.strs("job_ids"),
+			Window:        r.str("window"),
+			Since:         r.str("since"),
+			Until:         r.str("until"),
+			Target:        target,
+			ToolName:      r.str("tool_name"),
+			Status:        r.str("status"),
+			IncidentsOnly: r.b("incidents_only"),
+			Limit:         r.i("limit"),
+		}
 		if r.err == nil {
 			res, err = recipes.ExecuteRenderRunDigest(ctx, deps, p)
 		}
@@ -274,34 +284,60 @@ func buildMTUProbeExec(res *probe.MTUProbeResult, durMS int64) *toolExec {
 
 func buildMTRExec(res *probe.MTRResult, durMS int64) *toolExec {
 	rows, spark, health := make([]ascii.TableRow, 0, len(res.Hops)), make([]float64, 0, len(res.Hops)), make([]string, 0, len(res.Hops))
-	whiskers, status := make([]WhiskerPoint, 0, len(res.Hops)), statusOK
-	if !res.Reached && len(res.Hops) == 0 {
-		status = statusFAIL
+	whiskers := make([]WhiskerPoint, 0, len(res.Hops))
+	destLoss := res.DestLossPct
+	if res.Reached && len(res.Hops) > 0 && destLoss == 0 {
+		destLoss = res.Hops[len(res.Hops)-1].LossPct
 	}
-	hasIssue := false
+	status := statusOK
+	switch {
+	case !res.Reached:
+		status = statusFAIL
+	case destLoss >= 50:
+		status = statusFAIL
+	case destLoss >= 20:
+		status = statusWARN
+	}
 	for i := range res.Hops {
 		h, st := &res.Hops[i], statusOK
-		if h.LossPct >= 50 {
+		switch {
+		case h.Silent:
+			st = statusINFO
+		case h.LossPct >= 50:
 			st = statusFAIL
-			hasIssue = true
-		} else if h.LossPct > 0 || h.StDevMs >= 20 {
+		case h.LossPct >= 20 || h.StDevMs >= 20:
 			st = statusWARN
-			hasIssue = true
 		}
-		status = worstStatusVal(status, st)
 		rows = append(rows, ascii.TableRow{Status: st, Cells: []string{strconv.Itoa(h.Hop), h.IP, fmt.Sprintf("%.0f%%", h.LossPct), fmt.Sprintf("%.2f", h.AvgMs), fmt.Sprintf("%.2f", h.StDevMs)}})
 		spark, health = append(spark, h.AvgMs), append(health, st)
-		whiskers = append(whiskers, WhiskerPoint{Label: fmt.Sprintf("Hop %d (%s)", h.Hop, h.IP), MinMs: h.BestMs, AvgMs: h.AvgMs, MaxMs: h.WorstMs, LossPct: h.LossPct})
-	}
-	if !res.Reached && status == statusOK {
-		status = statusWARN
+		whiskers = append(whiskers, WhiskerPoint{
+			Label: fmt.Sprintf("Hop %d (%s)", h.Hop, h.IP), Segment: h.Segment, Hostname: h.Hostname,
+			Silent: h.Silent, MinMs: h.BestMs, AvgMs: h.AvgMs, MaxMs: h.WorstMs, LossPct: h.LossPct,
+		})
 	}
 	return makeExecCard(&cardSpec{
 		tool: "mtr_path_quality", title: "MTR PATH QUALITY", subtitle: res.ProbeMode, target: res.Target, status: status, durMS: durMS, raw: res,
-		summary: formatMTRSummary(res, hasIssue),
+		summary: formatMTRVerdict(res, destLoss),
 		metrics: []ascii.MetricKV{{Label: "Cycles", Value: strconv.Itoa(res.Cycles)}, {Label: "Hops", Value: strconv.Itoa(len(res.Hops))}, {Label: "Reached", Value: strconv.FormatBool(res.Reached)}},
 		headers: []string{"Hop", "IP", "Loss%", "Avg", "StDev"}, rows: rows, spark: spark, health: health, whiskers: whiskers,
 	})
+}
+
+func formatMTRVerdict(res *probe.MTRResult, destLoss float64) string {
+	n := len(res.Hops)
+	mode := firstNonEmpty(res.ProbeMode, "icmp")
+	if !res.Reached && n == 0 {
+		return fmt.Sprintf("Path quality trace (%s) to %s returned no responding hops", mode, res.Target)
+	}
+	hopWord := pluralWord(n, "hop", "hops")
+	if !res.Reached {
+		return fmt.Sprintf("Traced %d %s toward %s via %s without reaching destination (%.0f%% dest loss)", n, hopWord, res.Target, mode, destLoss)
+	}
+	verdict := fmt.Sprintf("Reached %s in %d %s via %s (%.0f%% dest loss)", res.Target, n, hopWord, mode, destLoss)
+	if res.SilentTransitHops > 0 {
+		verdict += fmt.Sprintf("; %d silent transit %s flowing", res.SilentTransitHops, pluralWord(res.SilentTransitHops, "router", "routers"))
+	}
+	return verdict
 }
 
 func buildDiscoverExec(res *probe.DiscoverResult, durMS int64) *toolExec {

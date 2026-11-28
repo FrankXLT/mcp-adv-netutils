@@ -71,29 +71,46 @@ func buildHTTPPingExec(res *http_ping.HTTPPingResponse, durMS int64) *toolExec {
 
 func buildTracerouteExec(res *traceroute.TracerouteResponse, durMS int64) *toolExec {
 	status := statusOK
-	if len(res.Hops) == 0 {
+	switch {
+	case len(res.Hops) == 0 || !res.ReachedDestination || res.DestLossPct >= 50:
 		status = statusFAIL
-	} else if !res.ReachedDestination {
+	case res.DestLossPct >= 20:
 		status = statusWARN
 	}
 	rows, spark, health := make([]ascii.TableRow, 0, len(res.Hops)), make([]float64, 0, len(res.Hops)), make([]string, 0, len(res.Hops))
 	whiskers := make([]WhiskerPoint, 0, len(res.Hops))
 	for i := range res.Hops {
-		h, hst, loss := &res.Hops[i], statusOK, 0.0
-		if h.TimedOut {
-			hst, loss = statusWARN, 100
-		}
+		h := &res.Hops[i]
+		isDest := h.Segment == "Destination" || (res.ResolvedIP != "" && h.IP == res.ResolvedIP) || (res.ReachedDestination && i == len(res.Hops)-1)
+		wp, hst := tracerouteHopWhisker(h, isDest, res.DestLossPct)
 		rows = append(rows, ascii.TableRow{Status: hst, Cells: []string{strconv.Itoa(h.Hop), h.IP, firstNonEmpty(h.Hostname, "-"), fmt.Sprintf("%.2fms", h.AvgRTTMs)}})
-		spark, health = append(spark, h.AvgRTTMs), append(health, hst)
-		minR, maxR := minMaxFloat(h.RTTMs, h.AvgRTTMs)
-		whiskers = append(whiskers, WhiskerPoint{Label: fmt.Sprintf("%d: %s", h.Hop, h.IP), MinMs: minR, AvgMs: h.AvgRTTMs, MaxMs: maxR, LossPct: loss})
+		spark, health, whiskers = append(spark, h.AvgRTTMs), append(health, hst), append(whiskers, wp)
 	}
 	return makeExecCard(&cardSpec{
-		tool: "traceroute", title: "TRACEROUTE", target: res.Target, status: status, durMS: durMS, raw: res,
-		summary: formatTracerouteSummary(res),
+		tool: "traceroute", title: "TRACEROUTE", subtitle: res.ProbeMode, target: res.Target, status: status, durMS: durMS, raw: res,
+		summary: formatTracerouteVerdict(res),
 		metrics: []ascii.MetricKV{{Label: "Resolved IP", Value: res.ResolvedIP}, {Label: "Hops", Value: strconv.Itoa(len(res.Hops))}, {Label: "Reached", Value: strconv.FormatBool(res.ReachedDestination)}},
 		headers: []string{"Hop", "IP", "Host", "Avg"}, rows: rows, spark: spark, health: health, whiskers: whiskers,
 	})
+}
+
+func formatTracerouteVerdict(res *traceroute.TracerouteResponse) string {
+	n := len(res.Hops)
+	if n == 0 {
+		return fmt.Sprintf("Route trace to %s returned no responding hops", res.Target)
+	}
+	hopWord, mode := pluralWord(n, "hop", "hops"), firstNonEmpty(res.ProbeMode, "icmp")
+	if !res.ReachedDestination {
+		return fmt.Sprintf("Traced %d %s toward %s via %s without reaching destination", n, hopWord, res.Target, mode)
+	}
+	msg := fmt.Sprintf("Reached %s in %d %s via %s", res.Target, n, hopWord, mode)
+	if last := res.Hops[n-1]; !last.TimedOut && last.AvgRTTMs > 0 {
+		msg += fmt.Sprintf(" (%.1f ms final hop)", last.AvgRTTMs)
+	}
+	if res.SilentTransitHops > 0 {
+		msg += fmt.Sprintf("; %d silent transit %s flowing", res.SilentTransitHops, pluralWord(res.SilentTransitHops, "router", "routers"))
+	}
+	return msg
 }
 
 func buildHTTPWaterfall(dnsMs, connMs, tlsMs, ttfbMs, totalMs float64) []WaterfallPhase {
@@ -295,14 +312,15 @@ func resolverDNSRow(res *resolver.ResolverResponse) DNSComparisonRow {
 }
 
 func extractDiffPingCharts(data *recipes.DiffPingData) ([]WhiskerPoint, []WaterfallPhase) {
-	whiskers, wf, cursor := make([]WhiskerPoint, 0, len(data.Hops)), make([]WaterfallPhase, 0, len(data.Hops)), 0.0
+	whiskers := make([]WhiskerPoint, 0, len(data.Hops))
 	for i := range data.Hops {
 		h := &data.Hops[i]
-		whiskers = append(whiskers, WhiskerPoint{Label: h.Stage, MinMs: h.AvgRTTMs, AvgMs: h.AvgRTTMs, MaxMs: h.AvgRTTMs, LossPct: h.LossPct})
-		wf = append(wf, WaterfallPhase{Label: h.Stage, StartMs: cursor, DurationMs: h.AvgRTTMs})
-		cursor += h.AvgRTTMs
+		whiskers = append(whiskers, WhiskerPoint{
+			Label: h.Stage, Segment: h.Stage, Hostname: h.Address,
+			MinMs: h.AvgRTTMs, AvgMs: h.AvgRTTMs, MaxMs: h.AvgRTTMs, LossPct: h.LossPct,
+		})
 	}
-	return whiskers, wf
+	return whiskers, nil
 }
 
 func extractSnapshotDiff(data *recipes.DiffSnapshotData, now time.Time) *SnapshotDiffView {
@@ -340,28 +358,54 @@ func extractLANInventory(data *recipes.LANRadarData, now time.Time) *LANInventor
 }
 
 func extractPathAutopsyWhiskers(data *recipes.PathAutopsyData) []WhiskerPoint {
-	if data.MTR != nil {
+	useTraceroute := data.MTR == nil || (!data.MTR.Reached && data.Traceroute != nil && (data.Traceroute.ReachedDestination || (len(data.MTR.Hops) == 0 && len(data.Traceroute.Hops) > 0)))
+	if !useTraceroute {
 		out := make([]WhiskerPoint, 0, len(data.MTR.Hops))
 		for i := range data.MTR.Hops {
 			h := &data.MTR.Hops[i]
-			out = append(out, WhiskerPoint{Label: fmt.Sprintf("Hop %d (%s)", h.Hop, h.IP), MinMs: h.BestMs, AvgMs: h.AvgMs, MaxMs: h.WorstMs, LossPct: h.LossPct})
+			out = append(out, WhiskerPoint{
+				Label: fmt.Sprintf("Hop %d (%s)", h.Hop, h.IP), Segment: h.Segment, Hostname: h.Hostname,
+				Silent: h.Silent, MinMs: h.BestMs, AvgMs: h.AvgMs, MaxMs: h.WorstMs, LossPct: h.LossPct,
+			})
 		}
 		return out
 	}
 	if data.Traceroute != nil {
+		destLoss := data.Traceroute.DestLossPct
+		if destLoss == 0 {
+			destLoss = data.DestLossPct
+		}
 		out := make([]WhiskerPoint, 0, len(data.Traceroute.Hops))
 		for i := range data.Traceroute.Hops {
 			h := &data.Traceroute.Hops[i]
-			minR, maxR := minMaxFloat(h.RTTMs, h.AvgRTTMs)
-			loss := 0.0
-			if h.TimedOut {
-				loss = 100
-			}
-			out = append(out, WhiskerPoint{Label: fmt.Sprintf("%d: %s", h.Hop, h.IP), MinMs: minR, AvgMs: h.AvgRTTMs, MaxMs: maxR, LossPct: loss})
+			isDest := h.Segment == "Destination" || (data.ResolvedIP != "" && h.IP == data.ResolvedIP) || (data.Traceroute.ResolvedIP != "" && h.IP == data.Traceroute.ResolvedIP) || (data.Traceroute.ReachedDestination && i == len(data.Traceroute.Hops)-1)
+			wp, _ := tracerouteHopWhisker(h, isDest, destLoss)
+			out = append(out, wp)
 		}
 		return out
 	}
 	return nil
+}
+
+func tracerouteHopWhisker(h *traceroute.HopResult, isDest bool, destLoss float64) (WhiskerPoint, string) {
+	hst, loss := statusOK, 0.0
+	if h.Silent {
+		hst, loss = statusINFO, 100
+	} else if h.TimedOut {
+		hst, loss = statusWARN, 100
+	} else if isDest && destLoss > 0 {
+		loss = destLoss
+		if destLoss >= 50 {
+			hst = statusFAIL
+		} else if destLoss >= 20 {
+			hst = statusWARN
+		}
+	}
+	minR, maxR := minMaxFloat(h.RTTMs, h.AvgRTTMs)
+	return WhiskerPoint{
+		Label: fmt.Sprintf("%d: %s", h.Hop, h.IP), Segment: h.Segment, Hostname: h.Hostname,
+		Silent: h.Silent, MinMs: minR, AvgMs: h.AvgRTTMs, MaxMs: maxR, LossPct: loss,
+	}, hst
 }
 
 func minMaxFloat(vals []float64, fallback float64) (float64, float64) {

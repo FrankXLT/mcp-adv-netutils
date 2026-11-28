@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -306,8 +307,8 @@ func TestMTRParamsClamping(t *testing.T) {
 
 	maxHops, cycles, timeout := normalizeMTRParams(MTRParams{})
 	assert.Equal(t, 15, maxHops)
-	assert.Equal(t, 5, cycles)
-	assert.Equal(t, 1500*time.Millisecond, timeout)
+	assert.Equal(t, 4, cycles)
+	assert.Equal(t, 900*time.Millisecond, timeout)
 
 	maxHops, cycles, timeout = normalizeMTRParams(MTRParams{MaxHops: -3, Cycles: -1, TimeoutMS: 10})
 	assert.Equal(t, 1, maxHops)
@@ -315,6 +316,16 @@ func TestMTRParamsClamping(t *testing.T) {
 	assert.Equal(t, 100*time.Millisecond, timeout)
 
 	maxHops, cycles, timeout = normalizeMTRParams(MTRParams{MaxHops: 99, Cycles: 50, TimeoutMS: 20000})
+	assert.Equal(t, 30, maxHops)
+	assert.Equal(t, 10, cycles)
+	assert.Equal(t, 5000*time.Millisecond, timeout)
+
+	maxHops, cycles, timeout = normalizeMTRParams(MTRParams{MaxHops: 1, Cycles: 1, TimeoutMS: 100})
+	assert.Equal(t, 1, maxHops)
+	assert.Equal(t, 1, cycles)
+	assert.Equal(t, 100*time.Millisecond, timeout)
+
+	maxHops, cycles, timeout = normalizeMTRParams(MTRParams{MaxHops: 30, Cycles: 10, TimeoutMS: 5000})
 	assert.Equal(t, 30, maxHops)
 	assert.Equal(t, 10, cycles)
 	assert.Equal(t, 5000*time.Millisecond, timeout)
@@ -418,7 +429,7 @@ func TestExecuteMTRQualityLoopbackAndBoundedPTR(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "127.0.0.1", res.Target)
 	assert.Equal(t, "127.0.0.1", res.ResolvedIP)
-	assert.Contains(t, []string{"icmp", "tcp_traceroute_fallback"}, res.ProbeMode)
+	assert.Contains(t, []string{"icmp", "tcp_443", "tcp_80", "tcp_traceroute_fallback"}, res.ProbeMode)
 	assert.Equal(t, 3, res.Cycles)
 	assert.Equal(t, 3, res.MaxHops)
 	assert.True(t, res.Reached)
@@ -426,9 +437,11 @@ func TestExecuteMTRQualityLoopbackAndBoundedPTR(t *testing.T) {
 
 	lastHop := res.Hops[len(res.Hops)-1]
 	assert.Equal(t, "127.0.0.1", lastHop.IP)
+	assert.Equal(t, "Destination", lastHop.Segment)
 	assert.Equal(t, 3, lastHop.Sent)
 	assert.Equal(t, 3, lastHop.Received)
 	assert.InDelta(t, 0.0, lastHop.LossPct, 1e-9)
+	assert.InDelta(t, 0.0, res.DestLossPct, 1e-9)
 	assert.LessOrEqual(t, lastHop.BestMs, lastHop.AvgMs)
 	assert.LessOrEqual(t, lastHop.AvgMs, lastHop.WorstMs)
 	assert.GreaterOrEqual(t, lastHop.StDevMs, 0.0)
@@ -446,4 +459,283 @@ func TestExecuteMTRQualityLoopbackAndBoundedPTR(t *testing.T) {
 	resolveMTRHopHostnames(ctx, manyHops)
 	assert.Empty(t, manyHops[0].Hostname)
 	assert.NotEmpty(t, manyHops[1].Hostname)
+}
+
+func TestICMPMTRProbeIDSeqUniqueness(t *testing.T) {
+	t.Parallel()
+
+	type idSeqPair struct{ id, seq int }
+	seenAll := make(map[idSeqPair]struct{}, 120)
+	for cycle := range 4 {
+		seenIDs := make(map[int]struct{}, 30)
+		for hop := 1; hop <= 30; hop++ {
+			id, seq := icmpMTRProbeIDSeq(0x1357, cycle, hop)
+			assert.NotContains(t, seenIDs, id, "duplicate ID in cycle %d hop %d", cycle, hop)
+			seenIDs[id] = struct{}{}
+
+			pair := idSeqPair{id: id, seq: seq}
+			assert.NotContains(t, seenAll, pair, "duplicate (ID, Seq) at cycle %d hop %d", cycle, hop)
+			seenAll[pair] = struct{}{}
+		}
+	}
+}
+
+func TestICMPWaveDemuxEchoAndTimeExceeded(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	w := &icmpWaveState{
+		limitHops:   4,
+		sendingDone: true,
+		entries: []icmpWaveEntry{
+			{sent: true, sentAt: now.Add(-15 * time.Millisecond)},
+			{sent: true, sentAt: now.Add(-12 * time.Millisecond)},
+			{sent: true, sentAt: now.Add(-8 * time.Millisecond)},
+			{sent: true, sentAt: now.Add(-5 * time.Millisecond)},
+		},
+		byKey: map[icmpProbeKey]int{
+			{id: 0x1001, seq: 1}: 0,
+			{id: 0x1102, seq: 2}: 1,
+			{id: 0x1203, seq: 3}: 2,
+			{id: 0x1304, seq: 4}: 3,
+		},
+		done: make(chan struct{}),
+	}
+
+	// Outgoing EchoRequest looped back on raw socket must be ignored.
+	reqMsg := &icmp.Message{Type: ipv4.ICMPTypeEcho, Body: &icmp.Echo{ID: 0x1203, Seq: 3}}
+	_, _, _, reqValid := extractICMPWaveReply(reqMsg, true, "93.184.216.34", "93.184.216.34")
+	assert.False(t, reqValid)
+
+	// IPv4 TimeExceeded (IHL=6 options) for hop 1.
+	tePkt := make([]byte, 32)
+	tePkt[0] = (4 << 4) | 6
+	tePkt[9] = mtrICMPProtoV4
+	binary.BigEndian.PutUint16(tePkt[28:30], 0x1001)
+	binary.BigEndian.PutUint16(tePkt[30:32], 1)
+	teMsg := &icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Body: &icmp.TimeExceeded{Data: tePkt}}
+	id1, seq1, reached1, ok1 := extractICMPWaveReply(teMsg, true, "192.168.1.1", "93.184.216.34")
+	require.True(t, ok1)
+	assert.False(t, reached1)
+	w.recordReply(id1, seq1, "192.168.1.1", reached1, now)
+
+	// IPv4 EchoReply for hop 3 (target reached before hop 2 arrives).
+	echoReply := &icmp.Message{Type: ipv4.ICMPTypeEchoReply, Body: &icmp.Echo{ID: 0x1203, Seq: 3}}
+	id3, seq3, reached3, ok3 := extractICMPWaveReply(echoReply, true, "93.184.216.34", "93.184.216.34")
+	require.True(t, ok3)
+	assert.True(t, reached3)
+	w.recordReply(id3, seq3, "93.184.216.34", reached3, now)
+	assert.Equal(t, 3, w.minReached)
+
+	// Wave must not complete until hop 2 also matches.
+	select {
+	case <-w.done:
+		t.Fatal("wave marked done before intermediate hop 2 matched")
+	default:
+	}
+
+	// IPv6 TimeExceeded demux check.
+	v6Pkt := make([]byte, 48)
+	v6Pkt[0] = 6 << 4
+	v6Pkt[6] = mtrICMPProtoV6
+	binary.BigEndian.PutUint16(v6Pkt[44:46], 0xabcd)
+	binary.BigEndian.PutUint16(v6Pkt[46:48], 2)
+	v6TE := &icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Body: &icmp.TimeExceeded{Data: v6Pkt}}
+	idV6, seqV6, reachedV6, okV6 := extractICMPWaveReply(v6TE, false, "2001:db8::1", "2001:db8::99")
+	require.True(t, okV6)
+	assert.Equal(t, 0xabcd, idV6)
+	assert.Equal(t, 2, seqV6)
+	assert.False(t, reachedV6)
+
+	// Complete hop 2 -> wave done closes immediately without waiting for hop 4.
+	binary.BigEndian.PutUint16(tePkt[28:30], 0x1102)
+	binary.BigEndian.PutUint16(tePkt[30:32], 2)
+	id2, seq2, reached2, ok2 := extractICMPWaveReply(teMsg, true, "10.0.0.1", "93.184.216.34")
+	require.True(t, ok2)
+	w.recordReply(id2, seq2, "10.0.0.1", reached2, now)
+
+	<-w.done
+	assert.Equal(t, "192.168.1.1", w.entries[0].hopIP)
+	assert.Equal(t, "10.0.0.1", w.entries[1].hopIP)
+	assert.Equal(t, "93.184.216.34", w.entries[2].hopIP)
+	assert.True(t, w.entries[2].reached)
+}
+
+func TestFinalizeMTRMetadataAndSelection(t *testing.T) {
+	t.Parallel()
+
+	targetIP := net.ParseIP("93.184.216.34")
+	reachedRes := &MTRResult{
+		ProbeMode: "icmp",
+		Reached:   true,
+		Hops: []MTRHop{
+			{Hop: 1, IP: "192.168.1.1", Sent: 4, Received: 4},
+			{Hop: 2, IP: "*", Sent: 4, Received: 0, LossPct: 100},
+			{Hop: 3, IP: "203.0.113.5", Sent: 4, Received: 4},
+			{Hop: 4, IP: "*", Sent: 4, Received: 0, LossPct: 100},
+			{Hop: 5, IP: "93.184.216.34", Sent: 4, Received: 4, LossPct: 0},
+			{Hop: 6, IP: "*", Sent: 4, Received: 0, LossPct: 100},
+			{Hop: 7, IP: "*", Sent: 4, Received: 0, LossPct: 100},
+		},
+	}
+	finalizeMTRMetadata(reachedRes, targetIP)
+	require.Len(t, reachedRes.Hops, 5)
+	assert.Equal(t, "Gateway", reachedRes.Hops[0].Segment)
+	assert.False(t, reachedRes.Hops[0].Silent)
+	assert.Equal(t, "Transit", reachedRes.Hops[1].Segment)
+	assert.True(t, reachedRes.Hops[1].Silent)
+	assert.False(t, reachedRes.Hops[2].Silent)
+	assert.True(t, reachedRes.Hops[3].Silent)
+	assert.Equal(t, "Destination", reachedRes.Hops[4].Segment)
+	assert.False(t, reachedRes.Hops[4].Silent)
+	assert.Equal(t, 2, reachedRes.SilentTransitHops)
+	assert.InDelta(t, 0.0, reachedRes.DestLossPct, 1e-9)
+
+	unreachedRes := &MTRResult{
+		ProbeMode: "icmp",
+		Reached:   false,
+		Hops: []MTRHop{
+			{Hop: 1, IP: "10.0.0.1", Sent: 1, Received: 1},
+			{Hop: 2, IP: "*", Sent: 1, Received: 0, LossPct: 100},
+			{Hop: 3, IP: "198.51.100.1", Sent: 1, Received: 1},
+			{Hop: 4, IP: "*", Sent: 1, Received: 0, LossPct: 100},
+			{Hop: 5, IP: "*", Sent: 1, Received: 0, LossPct: 100},
+		},
+	}
+	finalizeMTRMetadata(unreachedRes, targetIP)
+	require.Len(t, unreachedRes.Hops, 5)
+	assert.True(t, unreachedRes.Hops[1].Silent)
+	assert.False(t, unreachedRes.Hops[3].Silent)
+	assert.False(t, unreachedRes.Hops[4].Silent)
+	assert.Equal(t, 1, unreachedRes.SilentTransitHops)
+	assert.InDelta(t, 100.0, unreachedRes.DestLossPct, 1e-9)
+
+	// Escalation selection: prefer reached TCP, else ICMP if it saw more intermediate hops.
+	tcpReached := &MTRResult{ProbeMode: "tcp_443", Reached: true, Hops: []MTRHop{{Hop: 1, IP: "93.184.216.34", Received: 4}}}
+	assert.Equal(t, "tcp_443", selectWinningMTRResult(unreachedRes, true, tcpReached).ProbeMode)
+
+	tcpEmpty := &MTRResult{ProbeMode: "tcp_traceroute_fallback", Reached: false, Hops: []MTRHop{{Hop: 1, IP: "*", Received: 0}}}
+	assert.Equal(t, "icmp", selectWinningMTRResult(unreachedRes, true, tcpEmpty).ProbeMode)
+	assert.Equal(t, "tcp_traceroute_fallback", selectWinningMTRResult(&MTRResult{ProbeMode: "icmp", Hops: []MTRHop{{Hop: 1, IP: "*", Received: 0}}}, true, tcpEmpty).ProbeMode)
+
+	// Additional selectWinningMTRResult edge branches: !hasICMP, nil inputs, ties, tcp > icmp.
+	assert.Equal(t, "tcp_443", selectWinningMTRResult(unreachedRes, false, tcpReached).ProbeMode)
+	assert.Equal(t, "tcp_traceroute_fallback", selectWinningMTRResult(nil, false, nil).ProbeMode)
+	assert.Equal(t, "tcp_traceroute_fallback", selectWinningMTRResult(nil, true, tcpEmpty).ProbeMode)
+	assert.Equal(t, "icmp", selectWinningMTRResult(unreachedRes, true, nil).ProbeMode)
+
+	tcpTwoHops := &MTRResult{
+		ProbeMode: "tcp_80",
+		Reached:   false,
+		Hops:      []MTRHop{{Hop: 1, IP: "10.0.0.1", Received: 1}, {Hop: 2, IP: "10.0.0.2", Received: 1}},
+	}
+	assert.Equal(t, "tcp_80", selectWinningMTRResult(unreachedRes, true, tcpTwoHops).ProbeMode)
+	tcpThreeHops := &MTRResult{
+		ProbeMode: "tcp_443",
+		Reached:   false,
+		Hops:      []MTRHop{{Hop: 1, Received: 1}, {Hop: 2, Received: 1}, {Hop: 3, Received: 1}},
+	}
+	assert.Equal(t, "tcp_443", selectWinningMTRResult(unreachedRes, true, tcpThreeHops).ProbeMode)
+}
+
+func TestExecuteTCPTracerouteLoopbackAndNilGuards(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Nil context, nil IP, and invalid-length IP guards.
+	//nolint:staticcheck // Intentionally verifying nil context guard.
+	nilCtxRes := ExecuteTCPTraceroute(nil, net.ParseIP("127.0.0.1"), 3, 2, 200*time.Millisecond)
+	require.NotNil(t, nilCtxRes)
+	assert.False(t, nilCtxRes.Reached)
+	assert.Equal(t, "tcp_traceroute_fallback", nilCtxRes.ProbeMode)
+	assert.InDelta(t, 100.0, nilCtxRes.DestLossPct, 1e-9)
+
+	nilIPRes := ExecuteTCPTraceroute(ctx, nil, 3, 2, 200*time.Millisecond)
+	require.NotNil(t, nilIPRes)
+	assert.False(t, nilIPRes.Reached)
+	assert.InDelta(t, 100.0, nilIPRes.DestLossPct, 1e-9)
+
+	badIPRes := ExecuteTCPTraceroute(ctx, net.IP{1, 2}, 3, 2, 200*time.Millisecond)
+	require.NotNil(t, badIPRes)
+	assert.False(t, badIPRes.Reached)
+
+	// Loopback IPv4 execution via ExecuteTCPTraceroute.
+	res := ExecuteTCPTraceroute(ctx, net.ParseIP("127.0.0.1"), 3, 2, 250*time.Millisecond)
+	require.NotNil(t, res)
+	assert.Contains(t, []string{"tcp_443", "tcp_80", "tcp_traceroute_fallback"}, res.ProbeMode)
+	assert.Equal(t, "127.0.0.1", res.ResolvedIP)
+	assert.Equal(t, 3, res.MaxHops)
+	assert.Equal(t, 2, res.Cycles)
+	assert.True(t, res.Reached)
+	require.NotEmpty(t, res.Hops)
+	last := res.Hops[len(res.Hops)-1]
+	assert.Equal(t, "127.0.0.1", last.IP)
+	assert.Equal(t, "Destination", last.Segment)
+	assert.InDelta(t, 0.0, res.DestLossPct, 1e-9)
+	_, tsErr := time.Parse(time.RFC3339, res.Timestamp)
+	require.NoError(t, tsErr)
+}
+
+func TestICMPWaveConcurrentRecordReplyAndSummaryRead(t *testing.T) {
+	t.Parallel()
+
+	const hopsCount = 12
+	now := time.Now()
+	w := &icmpWaveState{
+		limitHops:   hopsCount,
+		sendingDone: true,
+		entries:     make([]icmpWaveEntry, hopsCount),
+		byKey:       make(map[icmpProbeKey]int, hopsCount),
+		done:        make(chan struct{}),
+	}
+	for i := range hopsCount {
+		id, seq := icmpMTRProbeIDSeq(0x2468, 0, i+1)
+		w.entries[i] = icmpWaveEntry{sent: true, sentAt: now.Add(-10 * time.Millisecond)}
+		w.byKey[icmpProbeKey{id: id, seq: seq}] = i
+	}
+
+	var wg sync.WaitGroup
+	// Concurrent reply writers + markFailed + locked summary readers exercising -race safety.
+	for i := range hopsCount {
+		wg.Go(func() {
+			id, seq := icmpMTRProbeIDSeq(0x2468, 0, i+1)
+			if i == hopsCount-1 {
+				w.markFailed(i+1, id, seq)
+				return
+			}
+			isDest := i == hopsCount-2
+			ip := "10.0.0.1"
+			if isDest {
+				ip = "93.184.216.34"
+			}
+			w.recordReply(id, seq, ip, isDest, now)
+		})
+	}
+	for range 4 {
+		wg.Go(func() {
+			for range 10 {
+				w.mu.Lock()
+				matched := 0
+				for j := range w.entries {
+					if w.entries[j].matched {
+						matched++
+					}
+				}
+				w.mu.Unlock()
+				assert.LessOrEqual(t, matched, hopsCount)
+			}
+		})
+	}
+	wg.Wait()
+	<-w.done
+
+	w.mu.Lock()
+	for i := range hopsCount - 1 {
+		assert.True(t, w.entries[i].matched)
+	}
+	assert.True(t, w.entries[hopsCount-2].reached)
+	assert.True(t, w.entries[hopsCount-1].failed)
+	w.mu.Unlock()
 }

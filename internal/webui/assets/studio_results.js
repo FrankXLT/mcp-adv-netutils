@@ -53,6 +53,9 @@
   }
 
   function beginRunFocus(tool, targetLabel, isAsync) {
+    const switchTab = (state.deps && typeof state.deps.setActiveTab === "function" && state.deps.setActiveTab) ||
+      (globalScope.NetUtilsStudio && typeof globalScope.NetUtilsStudio.setActiveTab === "function" && globalScope.NetUtilsStudio.setActiveTab);
+    if (switchTab) switchTab("checks");
     const card = $("checkResultCard");
     if (isAsync && state.deps) {
       state.deps.setStatusPill($("runStatusBadge"), "[RUNNING]", "warn");
@@ -84,6 +87,12 @@
     stripEl.hidden = false;
   }
 
+  const progressApi = () => globalScope.NetUtilsStudioProgress || null;
+  const isAborted = (err, token) => Boolean((state.deps && state.deps.isAbortError && state.deps.isAbortError(err, token)) || (progressApi() && progressApi().isAbortError(err, token)) || (err && err.name === "AbortError") || (token && token.signal && token.signal.aborted));
+  const cellText = (c) => (c && typeof c === "object" && "pill" in c ? String(c.pill) : (c instanceof Node ? (c.textContent || "") : String(c ?? "—")));
+  const renderCellNode = (c) => { if (!c || typeof c !== "object" || !("pill" in c)) return c; const sp = el("span", "va-pill", c.pill); sp.setAttribute("data-variant", "status"); sp.setAttribute("data-state", c.state || "nominal"); return sp; };
+  const rowIsSilent = (r) => Array.isArray(r) && r.some((c) => c && typeof c === "object" && c.state === "muted" && String(c.pill || "").includes("Silent"));
+
   function renderStructuredTable(wrapEl, tblSpec) {
     if (!wrapEl) return;
     if (!tblSpec || !Array.isArray(tblSpec.headers) || !tblSpec.headers.length || !Array.isArray(tblSpec.rows) || !tblSpec.rows.length) {
@@ -93,7 +102,7 @@
     tblSpec.headers.forEach((h) => hr.appendChild(el("th", "", h)));
     thead.appendChild(hr);
     const rowFn = state.deps && typeof state.deps.renderTableRows === "function" ? state.deps.renderTableRows : renderTableRows;
-    rowFn(tbody, tblSpec.rows, (r) => ({ cells: tblSpec.headers.map((h, i) => [h, r[i] ?? "—", i > 0 ? "tabular-nums" : ""]) }));
+    rowFn(tbody, tblSpec.rows, (r) => ({ rowClass: rowIsSilent(r) ? "hop-silent-row" : "", cells: tblSpec.headers.map((h, i) => [h, renderCellNode(r[i] ?? "—"), i > 0 ? "tabular-nums" : ""]) }));
     tbl.append(thead, tbody);
     wrapEl.replaceChildren(tbl);
     wrapEl.hidden = false;
@@ -109,14 +118,7 @@
       const st = String(r.status || "OK").toUpperCase(), pill = el("span", "va-pill", st);
       state.deps.setStatusPill(pill, st, state.deps.badgeVariant(st));
       const ans = Array.isArray(r.answers) && r.answers.length ? r.answers.join(", ") : "None";
-      return {
-        cells: [
-          ["Resolver", r.resolver],
-          ["Latency", r.latency_ms > 0 ? state.deps.fmtMsText(r.latency_ms) : "—", "tabular-nums"],
-          ["Answers", ans, "tabular-nums"],
-          ["Consensus", pill]
-        ]
-      };
+      return { cells: [["Resolver", r.resolver], ["Latency", r.latency_ms > 0 ? state.deps.fmtMsText(r.latency_ms) : "—", "tabular-nums"], ["Answers", ans, "tabular-nums"], ["Consensus", pill]] };
     });
     tbl.append(thead, tbody);
     wrapEl.replaceChildren(tbl);
@@ -131,9 +133,7 @@
     const tv = globalScope.NetutilsToolViews, facts = [];
     if (run && run.data && typeof run.data === "object" && !Array.isArray(run.data)) {
       Object.keys(run.data).slice(0, 8).forEach((k) => {
-        const lbl = tv ? tv.humanizeKey(k) : k.replace(/_/g, " ");
-        const txt = tv ? tv.formatValueHuman(run.data[k]) : String(run.data[k] ?? "—");
-        facts.push([lbl, txt]);
+        facts.push([tv ? tv.humanizeKey(k) : k.replace(/_/g, " "), tv ? tv.formatValueHuman(run.data[k]) : String(run.data[k] ?? "—")]);
       });
     }
     if (!facts.length) facts.push(["Status", run.status || "OK"], ["Target", run.target || "—"], ["Duration", state.deps.fmtMsText(outcomeDurationMs(run))]);
@@ -142,18 +142,19 @@
 
   function buildExportData(run, toolView) {
     const checkName = state.deps.getCheckLabel(run.tool), tv = globalScope.NetutilsToolViews;
-    let headers = ["Metric", "Value"], rows = [];
+    let headers = ["Metric", "Value"], rows = [], displayRows = null;
     if (toolView && toolView.table && Array.isArray(toolView.table.headers) && toolView.table.headers.length && Array.isArray(toolView.table.rows) && toolView.table.rows.length) {
       headers = toolView.table.headers.slice();
-      rows = toolView.table.rows.map((r) => r.map((c) => String(c ?? "—")));
+      displayRows = toolView.table.rows;
+      rows = toolView.table.rows.map((r) => r.map(cellText));
     } else if (Array.isArray(run.whiskers) && run.whiskers.length) {
-      headers = ["Segment / Hop", "Min (ms)", "Avg (ms)", "Max (ms)", "Loss (%)"];
+      headers = ["Segment / Hop", "Min (ms)", "Avg (ms)", "Max (ms)", "Loss / State"];
       rows = run.whiskers.map((w) => {
-        const lp = Number(w.lossPct ?? w.loss ?? 0);
-        const fmt = (val) => (lp >= 100 || !(Number(val) > 0) ? "—" : Number(val).toFixed(2));
-        return [w.label, fmt(w.minMs ?? w.min), fmt(w.avgMs ?? w.avg), fmt(w.maxMs ?? w.max), lp.toFixed(1)];
+        const lp = Number(w.lossPct ?? w.loss ?? 0), silent = Boolean(w.silent);
+        const fmt = (val) => (silent || lp >= 100 || !(Number(val) > 0) ? "—" : Number(val).toFixed(2));
+        return [w.label, fmt(w.minMs ?? w.min), fmt(w.avgMs ?? w.avg), fmt(w.maxMs ?? w.max), silent ? "Silent transit (*)" : lp.toFixed(1) + "%"];
       });
-    } else if (Array.isArray(run.waterfall) && run.waterfall.length) {
+    } else if (run.tool !== "recipe_diff_ping" && Array.isArray(run.waterfall) && run.waterfall.length) {
       headers = ["Phase", "Start (ms)", "Duration (ms)", "End (ms)"];
       rows = run.waterfall.map((p) => { const s = Number(p.startMs ?? 0), d = Number(p.durationMs ?? 0); return [p.label, s.toFixed(2), d.toFixed(2), (s + d).toFixed(2)]; });
     } else if (Array.isArray(run.dns_comparisons) && run.dns_comparisons.length) {
@@ -163,7 +164,7 @@
       const t = run.tls_health;
       rows = [["Subject", t.subject || "—"], ["Issuer", t.issuer || "—"], ["Days Remaining", String(t.days_remaining ?? "—")], ["Protocol", t.protocol || "—"], ["Cipher", t.cipher || "—"], ["Hostname Match", t.hostname_match ? "Yes" : "No"]];
     } else if (toolView && Array.isArray(toolView.summaryFacts) && toolView.summaryFacts.length) {
-      rows = toolView.summaryFacts.map(([k, v]) => [String(k), String(v ?? "—")]);
+      rows = toolView.summaryFacts.map(([k, v]) => [String(k), cellText(v)]);
     } else if (run.data && typeof run.data === "object") {
       Object.keys(run.data).slice(0, 16).forEach((k) => {
         rows.push([tv ? tv.humanizeKey(k) : k.replace(/_/g, " "), tv ? tv.formatValueHuman(run.data[k]) : String(run.data[k] ?? "—")]);
@@ -177,14 +178,18 @@
       "**Status:** " + (run.status || "OK") + " | **Duration:** " + state.deps.fmtMsText(outcomeDurationMs(run)),
       "", run.summary || "", "", "| " + headers.join(" | ") + " |", "| " + headers.map(() => "---").join(" | ") + " |"
     ].concat(rows.map((r) => "| " + r.map(clean).join(" | ") + " |")).join("\n");
-    return { headers, rows, markdown: md, tsv };
+    return { headers, rows, displayRows: displayRows || rows, markdown: md, tsv };
   }
 
   function renderFactsList(dlEl, facts) {
     if (!dlEl) return;
     if (!Array.isArray(facts) || !facts.length) { dlEl.replaceChildren(); dlEl.hidden = true; return; }
     const frag = document.createDocumentFragment();
-    facts.forEach(([k, v]) => { const box = el("div", "fact-item"); box.append(el("dt", "", k), el("dd", "", v)); frag.appendChild(box); });
+    facts.forEach(([k, v]) => {
+      const box = el("div", "fact-item"), dd = el("dd", ""), valNode = renderCellNode(v);
+      if (valNode instanceof Node) dd.appendChild(valNode); else dd.textContent = String(valNode ?? "—");
+      box.append(el("dt", "", k), dd); frag.appendChild(box);
+    });
     dlEl.replaceChildren(frag);
     dlEl.hidden = false;
   }
@@ -204,14 +209,13 @@
   }
 
   function inspectToolVisual(run, toolView, hasW, hasF, hasD) {
-    const hasRich = hasW || hasF || hasD;
+    const hasRich = hasW || hasF || hasD, t = run && run.tool;
     const hasChart = Boolean(toolView && toolView.chart && Array.isArray(toolView.chart.rows) && toolView.chart.rows.length);
     const hasTable = Boolean(toolView && toolView.table && Array.isArray(toolView.table.rows) && toolView.table.rows.length);
-    const allowTableWithRich = Boolean(run && run.tool === "recipe_diff_http" && hasTable && toolView.table.rows.length >= 2);
-    const showChart = !hasRich && hasChart;
-    const showTable = hasTable && (!hasRich || allowTableWithRich);
-    const hasToolVisual = showChart || showTable;
-    const title = showChart ? toolView.chart.title : (allowTableWithRich ? "Endpoint Comparison" : (state.deps.getCheckLabel(run.tool) + " Details"));
+    const isTraceTool = t === "recipe_path_autopsy" || t === "mtr_path_quality" || t === "traceroute";
+    const allowTableWithRich = Boolean(hasTable && ((t === "recipe_diff_http" && toolView.table.rows.length >= 2) || isTraceTool));
+    const showChart = !hasRich && hasChart, showTable = hasTable && (!hasRich || allowTableWithRich), hasToolVisual = showChart || showTable;
+    const title = showChart ? toolView.chart.title : (t === "recipe_diff_http" ? "Endpoint Comparison" : (state.deps.getCheckLabel(t) + " Details"));
     return { showChart, showTable, hasToolVisual, title };
   }
 
@@ -224,11 +228,8 @@
     if (hasD) { const b = el("div", "chart-panel"), h = el("div", "echart-host echart-host-sm"), dt = el("div", "va-table-scroll"); b.append(el("h3", "chart-title", "DNS Resolver Comparison"), h, dt); host.appendChild(b); if (ch) ch.renderDnsComparison(h, run.dns_comparisons); renderDnsTable(dt, run.dns_comparisons); }
     const tv = inspectToolVisual(run, toolView, hasW, hasF, hasD);
     if (tv.hasToolVisual) {
-      const b = el("div", "chart-panel");
-      b.appendChild(el("h3", "chart-title", tv.title));
-      if (tv.showChart && ch && typeof ch.renderHorizontalBars === "function") {
-        const h = el("div", "echart-host"); b.appendChild(h); ch.renderHorizontalBars(h, toolView.chart);
-      }
+      const b = el("div", "chart-panel"); b.appendChild(el("h3", "chart-title", tv.title));
+      if (tv.showChart && ch && typeof ch.renderHorizontalBars === "function") { const h = el("div", "echart-host"); b.appendChild(h); ch.renderHorizontalBars(h, toolView.chart); }
       if (tv.showTable) { const tw = el("div", "va-table-scroll va-table-wrap"); b.appendChild(tw); renderStructuredTable(tw, toolView.table); }
       host.appendChild(b);
     }
@@ -258,7 +259,7 @@
       (!hasW && !hasF && !hasD && !run.tls_health && !tv.hasToolVisual ? buildFallbackFacts(run) : []);
     $("runSummaryVisual").hidden = facts.length === 0;
     if (facts.length) { $("runVisualEmptyText").hidden = true; renderFactsList($("runFactsGrid"), facts); }
-    else { renderFactsList($("runFactsGrid"), []); }
+    else renderFactsList($("runFactsGrid"), []);
   }
 
   function renderOutcome(runData, isMainCard) {
@@ -275,7 +276,7 @@
     }
     renderTlsStrip($(isMainCard ? "tlsHealthStrip" : "jobDrawerTlsStrip"), run.tls_health);
     const hasW = Array.isArray(run.whiskers) && run.whiskers.length > 0;
-    const hasF = Array.isArray(run.waterfall) && run.waterfall.length > 0;
+    const hasF = run.tool !== "recipe_diff_ping" && Array.isArray(run.waterfall) && run.waterfall.length > 0;
     const hasD = Array.isArray(run.dns_comparisons) && run.dns_comparisons.length > 0;
 
     if (isMainCard) {
@@ -287,17 +288,11 @@
         else { charts.disposeHost($("runDnsHost")); $("runDnsTableWrap").replaceChildren(); }
       }
       renderMainToolSection(run, charts, hasW, hasF, hasD, toolView);
-    } else {
-      renderDrawerCharts(run, charts, hasW, hasF, hasD, toolView);
-    }
+    } else renderDrawerCharts(run, charts, hasW, hasF, hasD, toolView);
 
-    const exp = buildExportData(run, toolView);
-    const thead = $(isMainCard ? "runResultTableHead" : "jobDrawerTableHead");
-    const tbody = $(isMainCard ? "runResultTableBody" : "jobDrawerTableBody");
-    const hr = document.createElement("tr");
-    exp.headers.forEach((h) => hr.appendChild(el("th", "", h)));
-    thead.replaceChildren(hr);
-    state.deps.renderTableRows(tbody, exp.rows, (r) => ({ cells: exp.headers.map((h, i) => [h, r[i], i > 0 ? "tabular-nums" : ""]) }));
+    const exp = buildExportData(run, toolView), thead = $(isMainCard ? "runResultTableHead" : "jobDrawerTableHead"), tbody = $(isMainCard ? "runResultTableBody" : "jobDrawerTableBody");
+    const hr = document.createElement("tr"); exp.headers.forEach((h) => hr.appendChild(el("th", "", h))); thead.replaceChildren(hr);
+    state.deps.renderTableRows(tbody, exp.displayRows || exp.rows, (r) => ({ rowClass: rowIsSilent(r) ? "hop-silent-row" : "", cells: exp.headers.map((h, i) => [h, renderCellNode(r[i]), i > 0 ? "tabular-nums" : ""]) }));
     const ps = $(isMainCard ? "runExportPayload" : "jobDrawerExportPayload");
     if (ps) ps.textContent = JSON.stringify({ markdown: exp.markdown, tsv: exp.tsv });
     if (isMainCard && (run.lan_inventory || run.physical || run.virtual)) state.deps.ingestLanData(run.lan_inventory || run);
@@ -314,14 +309,12 @@
     ];
     if (Array.isArray(pastJob.whiskers) && Array.isArray(freshJob.whiskers)) {
       pastJob.whiskers.forEach((pw, idx) => {
-        const fw = freshJob.whiskers[idx];
-        if (!fw) return;
+        const fw = freshJob.whiskers[idx]; if (!fw) return;
         const pLoss = Number(pw.lossPct ?? pw.loss ?? 0), fLoss = Number(fw.lossPct ?? fw.loss ?? 0);
         const pVal = Number(pw.avgMs ?? pw.avg ?? 0), fVal = Number(fw.avgMs ?? fw.avg ?? 0);
-        const pMiss = pLoss >= 100 || !(pVal > 0), fMiss = fLoss >= 100 || !(fVal > 0);
-        const pTxt = pMiss ? "—" : pVal.toFixed(2) + " ms", fTxt = fMiss ? "—" : fVal.toFixed(2) + " ms";
-        const dTxt = (pMiss || fMiss) ? "—" : ((fVal - pVal <= 0 ? "" : "+") + (fVal - pVal).toFixed(2) + " ms");
-        rows.push([pw.label, pTxt, fTxt, dTxt]);
+        const pMiss = pw.silent || pLoss >= 100 || !(pVal > 0), fMiss = fw.silent || fLoss >= 100 || !(fVal > 0);
+        const pTxt = pw.silent ? "Silent" : (pMiss ? "—" : pVal.toFixed(2) + " ms"), fTxt = fw.silent ? "Silent" : (fMiss ? "—" : fVal.toFixed(2) + " ms");
+        rows.push([pw.label, pTxt, fTxt, (pMiss || fMiss) ? "—" : ((fVal - pVal <= 0 ? "" : "+") + (fVal - pVal).toFixed(2) + " ms")]);
       });
     }
     state.deps.renderTableRows($("jobDrawerCompareBody"), rows, (r) => {
@@ -333,8 +326,8 @@
 
   async function openJobDrawer(jobId) {
     if (!jobId) return;
-    const seq = ++state.drawerReqSeq;
-    const j = await state.deps.loadJobById(jobId);
+    const api = progressApi(); if (api && typeof api.cancelSurface === "function") api.cancelSurface("drawer", true);
+    const seq = ++state.drawerReqSeq, j = await state.deps.loadJobById(jobId);
     if (seq !== state.drawerReqSeq || !j) return;
     state.drawerJob = j;
     $("jobDrawerTitle").textContent = state.deps.getCheckLabel(j.tool) + " — " + (j.target || "Local");
@@ -342,34 +335,32 @@
     $("jobDrawerSummary").textContent = j.summary || "Archived check report.";
     $("jobDrawerComparePanel").hidden = true;
     $("jobDrawerRunAgainBtn").setAttribute("aria-busy", "false");
-    const cb = $("jobDrawerResultCard").querySelector('[data-qe-view="chart"]');
-    if (cb) cb.click();
+    const cb = $("jobDrawerResultCard").querySelector('[data-qe-view="chart"]'); if (cb) cb.click();
     const dlg = $("jobDrawer");
-    if (dlg) {
-      dlg.returnValue = "";
-      if (typeof dlg.showModal === "function") {
-        if (!dlg.open) dlg.showModal();
-      } else {
-        dlg.setAttribute("open", "");
-      }
-    }
+    if (dlg) { dlg.returnValue = ""; if (typeof dlg.showModal === "function") { if (!dlg.open) dlg.showModal(); } else dlg.setAttribute("open", ""); }
     renderOutcome(j, false);
     if (dlg && globalScope.NetutilsCharts) globalScope.NetutilsCharts.refreshInContainer(dlg);
   }
 
   async function handleRunAgain() {
-    const past = state.drawerJob;
-    const dlg = $("jobDrawer");
+    const past = state.drawerJob, dlg = $("jobDrawer");
     if (!past || !dlg || !dlg.open) return;
-    const seq = ++state.drawerReqSeq;
-    const btn = $("jobDrawerRunAgainBtn");
-    btn.setAttribute("aria-busy", "true");
+    const seq = ++state.drawerReqSeq, btn = $("jobDrawerRunAgainBtn"), api = progressApi();
+    const prog = api && typeof api.beginRun === "function" ? api.beginRun({
+      surface: "drawer", tool: past.tool, target: past.target, label: "Re-running " + state.deps.getCheckLabel(past.tool),
+      hint: api.describeCheckHint(past.tool, past.target), triggerBtn: btn, runningLabel: "Running…",
+      onCancel: () => { if (seq === state.drawerReqSeq) state.drawerReqSeq += 1; }
+    }) : null;
+    if (!prog) btn.setAttribute("aria-busy", "true");
     try {
-      const fresh = await state.deps.runAgainForCompare(past);
-      if (seq !== state.drawerReqSeq || !dlg.open || !state.drawerJob || state.drawerJob.job_id !== past.job_id) return;
+      const fresh = await state.deps.runAgainForCompare(past, { signal: prog ? prog.signal : undefined });
+      if (isAborted(null, prog) || seq !== state.drawerReqSeq || !dlg.open || !state.drawerJob || state.drawerJob.job_id !== past.job_id) return;
       if (fresh) renderCompareDiff(past, fresh);
+    } catch (err) {
+      if (isAborted(err, prog)) return;
+      if ($("jobDrawerSummary")) $("jobDrawerSummary").textContent = "Unable to complete fresh comparison check.";
     } finally {
-      if (seq === state.drawerReqSeq || !dlg.open) btn.setAttribute("aria-busy", "false");
+      if (prog) prog.finish(); else if (seq === state.drawerReqSeq || !dlg.open) btn.setAttribute("aria-busy", "false");
     }
   }
 
@@ -377,6 +368,7 @@
     const frag = document.createDocumentFragment();
     for (let i = 0; i < items.length; i += 1) {
       const spec = rowSpec(items[i], i), tr = document.createElement("tr");
+      if (spec.rowClass) tr.className = spec.rowClass;
       if (spec.jobId) tr.setAttribute("data-job-id", spec.jobId);
       for (let c = 0; c < spec.cells.length; c += 1) {
         const [label, content, cls] = spec.cells[c], td = el("td", cls || "");
@@ -419,13 +411,10 @@
     bindDialogDismiss(dlg);
     if (dlg) {
       dlg.addEventListener("close", () => {
-        state.drawerReqSeq += 1;
-        state.drawerJob = null;
-        const ch = globalScope.NetutilsCharts;
-        const host = $("jobDrawerChartsHost");
-        if (ch && host && typeof ch.disposeHost === "function") {
-          host.querySelectorAll(".echart-host").forEach((elHost) => ch.disposeHost(elHost));
-        }
+        const api = progressApi(); if (api && typeof api.cancelSurface === "function") api.cancelSurface("drawer", true);
+        state.drawerReqSeq += 1; state.drawerJob = null;
+        const ch = globalScope.NetutilsCharts, host = $("jobDrawerChartsHost");
+        if (ch && host && typeof ch.disposeHost === "function") host.querySelectorAll(".echart-host").forEach((elHost) => ch.disposeHost(elHost));
         $("jobDrawerRunAgainBtn").setAttribute("aria-busy", "false");
       });
     }

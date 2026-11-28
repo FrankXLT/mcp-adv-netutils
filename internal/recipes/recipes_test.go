@@ -6,6 +6,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -23,6 +25,7 @@ import (
 	"github.com/FrankXLT/mcp-adv-netutils/internal/security"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/store"
 	"github.com/FrankXLT/mcp-adv-netutils/internal/tls"
+	"github.com/FrankXLT/mcp-adv-netutils/internal/traceroute"
 	miekgdns "github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -301,9 +304,164 @@ func TestExecutePathAutopsy(t *testing.T) {
 	data, ok := res.Data.(PathAutopsyData)
 	require.True(t, ok)
 	assert.Equal(t, "127.0.0.1", data.ResolvedIP)
+	assert.True(t, data.Reached)
+	assert.Equal(t, 0.0, data.DestLossPct)
+	assert.NotEmpty(t, data.ProbeMode)
 	assert.NotNil(t, data.MTR)
 	assert.NotNil(t, data.MTU)
 	require.NotNil(t, res.Card)
+}
+
+func TestAnalyzePathAutopsyCoPPAndLossGrading(t *testing.T) {
+	t.Parallel()
+
+	t.Run("silent CoPP transit hops with reached destination stay OK", func(t *testing.T) {
+		t.Parallel()
+		data := PathAutopsyData{
+			Target:     "1.1.1.1",
+			ResolvedIP: "1.1.1.1",
+			MTU:        &probe.MTUProbeResult{DiscoveredMTU: 1500, WireGuardSafeMTU: 1420},
+			MTR: &probe.MTRResult{
+				ProbeMode:         "tcp_wave",
+				Reached:           true,
+				SilentTransitHops: 4,
+				DestLossPct:       0,
+				Hops: []probe.MTRHop{
+					{Hop: 1, IP: "*", Silent: true, LossPct: 100},
+					{Hop: 2, IP: "*", Silent: true, LossPct: 100},
+					{Hop: 3, IP: "*", Silent: true, LossPct: 100},
+					{Hop: 4, IP: "*", Silent: true, LossPct: 100},
+					{Hop: 5, IP: "1.1.1.1", Segment: "Destination", Sent: 4, Received: 4, LossPct: 0, AvgMs: 12.5, BestMs: 11.0, WorstMs: 14.0, StDevMs: 1.1},
+				},
+			},
+		}
+		rows, _, _, notes, status := analyzePathAutopsy(&data, nil, nil, nil)
+		assert.Equal(t, StatusOK, status)
+		assert.True(t, data.Reached)
+		assert.Equal(t, "tcp_wave", data.ProbeMode)
+		assert.Equal(t, 4, data.SilentTransitHops)
+		assert.Equal(t, 0.0, data.DestLossPct)
+		assert.Empty(t, data.LossHops)
+		require.Len(t, rows, 5)
+		for i := 0; i < 4; i++ {
+			assert.Equal(t, StatusOK, rows[i].Status)
+			assert.Equal(t, "*", rows[i].Cells[3])
+			assert.Equal(t, "*", rows[i].Cells[4])
+			assert.Equal(t, "silent (CoPP)", rows[i].Cells[5])
+		}
+		assert.Contains(t, strings.Join(notes, "\n"), "4 silent transit router(s) dropped ICMP TTL replies under CoPP while traffic reached the destination.")
+	})
+
+	t.Run("destination loss 25 percent warns and 50+ fails", func(t *testing.T) {
+		t.Parallel()
+		warnData := PathAutopsyData{
+			Target:     "1.1.1.1",
+			ResolvedIP: "1.1.1.1",
+			MTR: &probe.MTRResult{
+				ProbeMode:   "icmp",
+				Reached:     true,
+				DestLossPct: 25,
+				Hops: []probe.MTRHop{
+					{Hop: 1, IP: "10.0.0.1", Sent: 4, Received: 4, LossPct: 0, AvgMs: 1.0},
+					{Hop: 2, IP: "1.1.1.1", Segment: "Destination", Sent: 4, Received: 3, LossPct: 25, AvgMs: 10.0},
+				},
+			},
+		}
+		_, _, _, _, warnStatus := analyzePathAutopsy(&warnData, nil, nil, nil)
+		assert.Equal(t, StatusWARN, warnStatus)
+		assert.Equal(t, []int{2}, warnData.LossHops)
+
+		failData := PathAutopsyData{
+			Target:     "1.1.1.1",
+			ResolvedIP: "1.1.1.1",
+			MTR: &probe.MTRResult{
+				ProbeMode:   "icmp",
+				Reached:     true,
+				DestLossPct: 60,
+				Hops: []probe.MTRHop{
+					{Hop: 1, IP: "10.0.0.1", Sent: 5, Received: 5, LossPct: 0, AvgMs: 1.0},
+					{Hop: 2, IP: "1.1.1.1", Segment: "Destination", Sent: 5, Received: 2, LossPct: 60, AvgMs: 10.0},
+				},
+			},
+		}
+		_, _, _, _, failStatus := analyzePathAutopsy(&failData, nil, nil, nil)
+		assert.Equal(t, StatusFAIL, failStatus)
+		assert.Equal(t, []int{2}, failData.LossHops)
+	})
+
+	t.Run("unreachable target fails unless both MTR and traceroute error", func(t *testing.T) {
+		t.Parallel()
+		unreach := PathAutopsyData{
+			Target:     "198.51.100.1",
+			ResolvedIP: "198.51.100.1",
+			MTR: &probe.MTRResult{
+				ProbeMode:   "tcp_wave",
+				Reached:     false,
+				DestLossPct: 100,
+				Hops:        []probe.MTRHop{{Hop: 1, IP: "10.0.0.1", Sent: 4, Received: 4}, {Hop: 2, IP: "*", Sent: 4, LossPct: 100}},
+			},
+		}
+		_, _, _, _, status := analyzePathAutopsy(&unreach, nil, nil, nil)
+		assert.Equal(t, StatusFAIL, status)
+		assert.False(t, unreach.Reached)
+
+		bothErr := PathAutopsyData{Target: "198.51.100.1", ResolvedIP: "198.51.100.1"}
+		_, _, _, _, errStatus := analyzePathAutopsy(&bothErr, nil, errors.New("mtr failed"), errors.New("tr failed"))
+		assert.Equal(t, StatusWARN, errStatus)
+	})
+
+	t.Run("traceroute reachability supplements failed MTR", func(t *testing.T) {
+		t.Parallel()
+		data := PathAutopsyData{
+			Target:     "1.1.1.1",
+			ResolvedIP: "1.1.1.1",
+			MTR:        &probe.MTRResult{ProbeMode: "icmp", Reached: false, DestLossPct: 100},
+			Traceroute: &traceroute.TracerouteResponse{
+				ProbeMode:          "tcp_traceroute_fallback",
+				ReachedDestination: true,
+				SilentTransitHops:  2,
+				DestLossPct:        0,
+				Hops: []traceroute.HopResult{
+					{Hop: 1, IP: "*", Silent: true, TimedOut: true},
+					{Hop: 2, IP: "*", Silent: true, TimedOut: true},
+					{Hop: 3, IP: "1.1.1.1", Segment: "Destination", AvgRTTMs: 8.5},
+				},
+			},
+		}
+		rows, _, _, _, status := analyzePathAutopsy(&data, nil, nil, nil)
+		assert.Equal(t, StatusOK, status)
+		assert.True(t, data.Reached)
+		assert.Equal(t, "tcp_traceroute_fallback", data.ProbeMode)
+		assert.Equal(t, 2, data.SilentTransitHops)
+		assert.Empty(t, data.LossHops)
+		require.Len(t, rows, 3)
+		assert.Equal(t, "silent (CoPP)", rows[0].Cells[5])
+	})
+
+	t.Run("traceroute fallback reflects partial destination loss on row and LossHops", func(t *testing.T) {
+		t.Parallel()
+		data := PathAutopsyData{
+			Target:     "1.1.1.1",
+			ResolvedIP: "1.1.1.1",
+			MTR:        &probe.MTRResult{ProbeMode: "icmp", Reached: false, DestLossPct: 100},
+			Traceroute: &traceroute.TracerouteResponse{
+				ProbeMode:          "tcp_443",
+				ReachedDestination: true,
+				DestLossPct:        25,
+				Hops: []traceroute.HopResult{
+					{Hop: 1, IP: "10.0.0.1", AvgRTTMs: 1.5},
+					{Hop: 2, IP: "1.1.1.1", Segment: "Destination", AvgRTTMs: 9.0},
+				},
+			},
+		}
+		rows, _, _, _, status := analyzePathAutopsy(&data, nil, nil, nil)
+		assert.Equal(t, StatusWARN, status)
+		assert.Equal(t, []int{2}, data.LossHops)
+		require.Len(t, rows, 2)
+		assert.Equal(t, StatusWARN, rows[1].Status)
+		assert.Equal(t, "25%", rows[1].Cells[2])
+		assert.Equal(t, "loss", rows[1].Cells[5])
+	})
 }
 
 func TestExecuteWakeVerify(t *testing.T) {
@@ -356,9 +514,10 @@ func TestExecuteRenderRunDigest(t *testing.T) {
 
 	now := time.Now().UTC().Unix()
 	records := []*store.JobRecord{
-		{JobID: "job_ok", ToolName: "ping", Target: "1.1.1.1", Source: "manual", Status: "OK", Summary: "ok", DurationMS: 12, CreatedAt: now},
-		{JobID: "job_warn", ToolName: "diff_dns", Target: "example.com", Source: "cron", Status: "WARN", Summary: "split", DurationMS: 45, CreatedAt: now + 1},
-		{JobID: "job_fail", ToolName: "diff_ping", Target: "10.0.0.99", Source: "cron", Status: "FAIL", Summary: "down", DurationMS: 90, CreatedAt: now + 2, IsIncident: true},
+		{JobID: "job_ok", ToolName: "ping", Target: "1.1.1.1", Source: "manual", Status: "OK", Summary: "ok", DurationMS: 12, CreatedAt: now - 30},
+		{JobID: "job_warn", ToolName: "diff_dns", Target: "example.com", Source: "cron", Status: "degraded", Summary: "split", DurationMS: 45, CreatedAt: now - 20},
+		{JobID: "job_fail", ToolName: "diff_ping", Target: "10.0.0.99", Source: "cron", Status: "critical", Summary: "down", DurationMS: 90, CreatedAt: now - 10, IsIncident: true},
+		{JobID: "job_old", ToolName: "ping", Target: "10.0.0.99", Source: "cron", Status: "OK", Summary: "old ok", DurationMS: 15, CreatedAt: now - 3*24*3600},
 	}
 	for _, r := range records {
 		require.NoError(t, st.SaveJob(ctx, r))
@@ -369,18 +528,109 @@ func TestExecuteRenderRunDigest(t *testing.T) {
 	assert.Equal(t, StatusFAIL, res.Status)
 	data, ok := res.Data.(DigestData)
 	require.True(t, ok)
-	assert.Equal(t, 3, data.TotalJobs)
-	assert.Equal(t, 1, data.OKCount)
+	assert.Equal(t, 4, data.TotalJobs)
+	assert.Equal(t, 2, data.OKCount)
 	assert.Equal(t, 1, data.WarnCount)
 	assert.Equal(t, 1, data.FailCount)
 	assert.Equal(t, 1, data.IncidentCount)
-	require.Len(t, res.Card.Rows, 3)
+	require.Len(t, res.Card.Rows, 4)
 	assert.Equal(t, StatusFAIL, res.Card.Rows[0].Status)
 	assert.Equal(t, StatusWARN, res.Card.Rows[1].Status)
 	assert.Equal(t, StatusOK, res.Card.Rows[2].Status)
 	rendered, err := ascii.Render(res.Card, ascii.StyleRich)
 	require.NoError(t, err)
 	assert.Contains(t, rendered, "DIAGNOSTIC RUN DIGEST")
+
+	t.Run("explicit job_ids populates WindowSummary and rejects missing id", func(t *testing.T) {
+		explicitRes, execErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{JobIDs: []string{"job_ok", " ", "job_warn", "job_fail"}})
+		require.NoError(t, execErr)
+		expData := explicitRes.Data.(DigestData)
+		require.NotNil(t, expData.WindowSummary)
+		assert.Equal(t, 3, expData.WindowSummary.TotalMatching)
+		assert.Equal(t, 1, expData.WindowSummary.OKCount)
+		assert.Equal(t, 1, expData.WindowSummary.WarnCount)
+		assert.Equal(t, 1, expData.WindowSummary.FailCount)
+		assert.Equal(t, 1, expData.WindowSummary.IncidentCount)
+		assert.Len(t, expData.WindowSummary.ToolBreakdown, 3)
+		assert.Len(t, expData.WindowSummary.TopProblemTargets, 2)
+
+		_, missErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{JobIDs: []string{"no_such_job"}})
+		require.Error(t, missErr)
+	})
+
+	t.Run("window target fallback and time bounds validation", func(t *testing.T) {
+		win1h, wErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{Window: "1h"})
+		require.NoError(t, wErr)
+		assert.Equal(t, 3, win1h.Data.(DigestData).WindowSummary.TotalMatching)
+
+		win7d, wErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{Window: "7d"})
+		require.NoError(t, wErr)
+		assert.Equal(t, 4, win7d.Data.(DigestData).WindowSummary.TotalMatching)
+
+		studioFallback, fbErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{Target: "24h"})
+		require.NoError(t, fbErr)
+		fbData := studioFallback.Data.(DigestData)
+		assert.Equal(t, "24h", fbData.Window)
+		assert.Equal(t, "24h", studioFallback.Card.Target)
+		assert.Equal(t, 3, fbData.WindowSummary.TotalMatching)
+
+		rfcSince := time.Unix(now-25, 0).UTC().Format(time.RFC3339)
+		unixUntil := strconv.FormatInt(now-5, 10)
+		bounded, bErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{Since: rfcSince, Until: unixUntil, Limit: 200})
+		require.NoError(t, bErr)
+		assert.Equal(t, 2, bounded.Data.(DigestData).WindowSummary.TotalMatching)
+
+		emptyRes, eErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, RenderDigestParams{Target: "no-match-target"})
+		require.NoError(t, eErr)
+		assert.Equal(t, 0, emptyRes.Data.(DigestData).TotalJobs)
+		assert.Contains(t, emptyRes.Summary, "No stored jobs matched")
+
+		for _, bad := range []RenderDigestParams{
+			{Window: "99d"},
+			{Status: "BOGUS"},
+			{Since: "not-a-time"},
+			{Until: "-5"},
+			{Since: strconv.FormatInt(now, 10), Until: strconv.FormatInt(now-100, 10)},
+		} {
+			_, badErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: st}, bad)
+			require.Error(t, badErr)
+		}
+	})
+
+	t.Run("capDigestData truncates large digest payloads under MaxJSONBytes", func(t *testing.T) {
+		capSt, openErr := store.Open(ctx, filepath.Join(t.TempDir(), "cap.db"), 10)
+		require.NoError(t, openErr)
+		defer func() { _ = capSt.Close() }()
+
+		verbose := strings.Repeat("latency spike observed across transit path; ", 9)
+		for i := range 60 {
+			stLabel, inc := "OK", false
+			if i < 2 {
+				stLabel, inc = "FAIL", true
+			} else if i < 5 {
+				stLabel = "WARN"
+			}
+			require.NoError(t, capSt.SaveJob(ctx, &store.JobRecord{
+				JobID: fmt.Sprintf("cap_job_%03d", i), ToolName: "ping", Target: fmt.Sprintf("10.0.1.%d", i),
+				Source: "cron", Status: stLabel, Summary: verbose, DurationMS: int64(10 + i), CreatedAt: now + int64(i), IsIncident: inc,
+			}))
+		}
+
+		capRes, capErr := ExecuteRenderRunDigest(ctx, Dependencies{Store: capSt}, RenderDigestParams{Limit: 100})
+		require.NoError(t, capErr)
+		capData := capRes.Data.(DigestData)
+		assert.True(t, capData.Truncated)
+		assert.Greater(t, capData.OmittedJobs, 0)
+		require.NotNil(t, capData.WindowSummary)
+		assert.Equal(t, 60, capData.WindowSummary.TotalMatching)
+		assert.Equal(t, len(capData.Jobs), capData.TotalJobs)
+		assert.Less(t, capData.TotalJobs, 60)
+		assert.Equal(t, StatusFAIL, capData.Jobs[0].Status)
+
+		jsonOut, jErr := ascii.Render(capRes.Card, ascii.StyleJSON)
+		require.NoError(t, jErr)
+		assert.Less(t, len(jsonOut), ascii.MaxJSONBytes)
+	})
 }
 
 func startTestUDPServer(t *testing.T, handler miekgdns.Handler) string {

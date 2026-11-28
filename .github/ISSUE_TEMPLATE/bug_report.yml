@@ -1,0 +1,76 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in mcp-adv-netutils
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue!
+        **Security & Privacy Reminder:** Never paste `PASS_HASH`, `PATH_SECRET`, `LAN_MCP_TOKEN`, raw credentials, or private/internal IP addresses in public issues.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: Describe what happened and what component is impacted...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps or tool call arguments needed to reproduce the behavior (redact secrets and private IPs).
+      placeholder: |
+        1. Start server with `...`
+        2. Invoke tool / visit endpoint `...`
+        3. Observe error...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release version, git tag, or commit SHA (e.g., `2.1.0`).
+      placeholder: "2.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment_mode
+    attributes:
+      label: Deployment Mode
+      description: How is `mcp-adv-netutils` being run?
+      options:
+        - "--stdio"
+        - "--http Docker"
+        - "Native Go"
+        - "/web Studio"
+    validations:
+      required: true
+
+  - type: input
+    id: affected_tool
+    attributes:
+      label: Affected Tool or Endpoint
+      description: Name of the MCP tool (e.g., `ping`, `mtr_path_quality`) or HTTP route (e.g., `/web/api/...`, `/{PATH_SECRET}/mcp` — never include your actual `PATH_SECRET` or `LAN_MCP_TOKEN`).
+      placeholder: "e.g., traceroute or /web/api/..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected vs Actual Behavior
+      description: Compare what you expected to happen against what actually happened. Include sanitized logs or error output (redact `PASS_HASH`, `PATH_SECRET`, `LAN_MCP_TOKEN`, and private IPs).
+      placeholder: |
+        **Expected:**
+        ...
+
+        **Actual:**
+        ...
+    validations:
+      required: true

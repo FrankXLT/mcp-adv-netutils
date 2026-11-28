@@ -1,6 +1,6 @@
 ---
 name: netutils-ascii-display
-description: Format, render, and present mcp-adv-netutils diagnostic output using deterministic ASCII/TUI styles (default, quick, rich, json), verbatim fenced text blocks, and render_run_digest.
+description: Format, render, and present mcp-adv-netutils diagnostic output using deterministic ASCII/TUI styles (default, quick, rich, json), verbatim fenced text blocks, and render_run_digest (job_ids re-rendering + v2.1.0 time-window auditing).
 ---
 
 # `netutils-ascii-display`
@@ -36,13 +36,15 @@ Always wrap `default`, `quick`, and `rich` ASCII output verbatim inside a fenced
 - **Never** add trailing spaces, re-wrap lines, or strip box-drawing characters.
 - For `390px` mobile chats or tight notification cards, always choose `style: "quick"` so lines never exceed `40` columns.
 
-## Re-Rendering Persisted Runs (`render_run_digest`)
+## Re-Rendering Persisted Runs & Historical Window Digests (`render_run_digest`)
 
-Use `render_run_digest` whenever you have a stored `job_id` / run ID (from `get_cron_status`, `get_job_report`, or a previous recipe call) and need to view it in a different `style`:
+Use `render_run_digest` either to re-render stored `job_ids` (from `get_cron_status`, `get_job_report`, or a recipe run) or—in `v2.1.0`—to run **1-call historical time-window audits** without calling `get_job_report` per row:
 
-1. **Mobile Triage**: Call `render_run_digest` with `style: "quick"` (`<= 40` cols) for quick status checks on phones.
-2. **Incident Review**: Call `render_run_digest` with `style: "rich"` (`76` cols) to inspect boxed hop ladders, latency histograms, and full badge context.
-3. **Automation / Diffing**: Call `render_run_digest` with `style: "json"` (`< 18.5 KB`) to inspect sorted `FAIL`/`WARN` records programmatically.
+- **Persisted Run Re-Rendering (`job_ids`)**: Pass stored `job_ids` to switch layouts cleanly:
+  - **Mobile Triage** (`style: "quick"`, `<= 40` cols) for quick status checks on phones.
+  - **Incident Review** (`style: "rich"`, `76` cols) for boxed hop ladders, latency histograms, and badge context.
+  - **Automation / Diffing** (`style: "json"`, `< 18.5 KB`) for severity-sorted `FAIL`/`WARN` records.
+- **Historical Time-Window Audits (`v2.1.0`)**: Pass `window` (`"1h"`, `"6h"`, `"24h"`, `"7d"`, `"30d"`), optional `since`/`until`, `target`, `tool_name`, `status`, `incidents_only`, and `limit` (default `25`, max `100`) to emit a **1-call severity-sorted digest + `window_summary` trend readout** (`< 18.5 KB` `json` or fixed `72c` `default` / `<= 40c` `quick` / `76c` `rich` ASCII).
 
 ## Quick Decision Checklist
 

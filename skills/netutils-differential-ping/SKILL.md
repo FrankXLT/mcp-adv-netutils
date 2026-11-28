@@ -1,6 +1,6 @@
 ---
 name: netutils-differential-ping
-description: Triage network outages, packet loss, and MTU black holes using recipe_diff_ping, recipe_path_autopsy, mtu_path_probe, and mtr_path_quality, including icmp vs tcp_fallback interpretation.
+description: Triage network outages, packet loss, and MTU black holes using recipe_diff_ping, recipe_path_autopsy, mtu_path_probe, traceroute, and mtr_path_quality, including ICMP->TCP 443/80->UDP auto-fallback, parallel per-TTL waves, and silent CoPP transit vs destination loss interpretation.
 ---
 
 # `netutils-differential-ping`
@@ -14,7 +14,8 @@ Operational playbook for isolating *where* a network outage or latency spike ori
 | `recipe_diff_ping` | 4-stage differential reachability ladder + TCP RST/SYN-ACK + ARP check |
 | `recipe_path_autopsy` | Combined hop-by-hop quality, route trace, and MTU path diagnosis |
 | `mtu_path_probe` | DF-bit path MTU discovery across `1500`, `1492`, `1420`, and `1280` bytes |
-| `mtr_path_quality` | Multi-sample per-hop loss, RTT (`min`/`avg`/`max`), and jitter analysis |
+| `traceroute` | Parallel per-TTL wave path discovery (`~2–5s`) with `ICMP -> TCP 443/80 -> UDP` auto-fallback |
+| `mtr_path_quality` | Multi-sample per-hop loss, RTT (`min`/`avg`/`max`), jitter, `silent_transit_hops`, and `dest_loss_pct` analysis |
 
 ## Outage Triage Ladder (`recipe_diff_ping`)
 
@@ -38,13 +39,20 @@ Plus side-checks:
 | **[4] Public DNS OK, Target FAIL** | Remote host down, firewall drop, or target-specific port block | Compare ICMP vs TCP SYN-ACK/RST; run `recipe_path_autopsy` |
 | **[4] Public DNS FAIL & Target FAIL** | Upstream ISP transit outage or DNS/egress blockage | Run `mtr_path_quality` toward reference host (`1.1.1.1`) to locate hop drop |
 
-## Interpreting `probe_mode` (`icmp` vs `tcp_fallback`)
+## Interpreting `probe_mode`
 
+### Reachability Ladder (`ping` / `recipe_diff_ping`)
 - **`probe_mode: "icmp"`**: Native ICMP Echo Request/Reply succeeded. RTT reflects L3 network latency without TCP handshake overhead.
 - **`probe_mode: "tcp_fallback"`**: ICMP was blocked, rate-limited, or unavailable (`cap_net_raw` absent or host/WAN firewall drops Echo). The probe fell back to TCP connect timing (`SYN` -> `SYN-ACK` or `RST`):
   - `SYN-ACK` proves host + service port are alive.
   - `RST` proves the host L3/L4 stack is reachable even though the specific port is closed.
   - Timeout across both `icmp` and `tcp_fallback` indicates a silent firewall drop, dead host, or upstream routing black hole.
+
+### Path Probing (`traceroute` / `mtr_path_quality` / `recipe_path_autopsy` in `v2.1.0`)
+Path tools perform smart **`ICMP -> TCP 443/80 -> UDP` auto-fallback** and report the active mode in `probe_mode`:
+- **`"icmp"`**: Native ICMP Echo probes (preferred when unblocked).
+- **`"tcp_443"` / `"tcp_80"`**: TCP SYN path probes against port `443` or `80` when ICMP is filtered by intermediate firewalls or NAT edges.
+- **`"udp"`**: Classic high-port UDP probes when both ICMP and TCP path probing are blocked.
 
 ## MTU Black-Hole Triage (`mtu_path_probe`)
 
@@ -57,7 +65,13 @@ Run `mtu_path_probe` whenever small pings succeed (`64B`) but TLS handshakes, SS
 
 If `1500` fails with DF set while `1420` or `1280` passes, Path MTU Discovery (PMTUD) / ICMP "Fragmentation Needed" is being blocked along a tunnel or WAN edge.
 
-## Deep Path Diagnosis (`recipe_path_autopsy` & `mtr_path_quality`)
+## Deep Path Diagnosis (`traceroute`, `mtr_path_quality`, & `recipe_path_autopsy`)
 
-1. Run `mtr_path_quality` to distinguish **intermediate router ICMP rate-limiting** (loss at hop `N` that disappears at hop `N+1..dst`) from **true transit loss** (loss starting at hop `N` and persisting through the destination).
-2. Run `recipe_path_autopsy` when you need a single consolidated report combining differential stages, hop loss/jitter, and MTU ceiling—use `style: "quick"` (`<= 40` cols) for mobile or `style: "rich"` (`76` cols) for desktop review.
+1. **Parallel Per-TTL Wave Execution (`~2–5s`) & Conntrack Isolation**:
+   - In `v2.1.0`, `traceroute`, `mtr_path_quality`, and `recipe_path_autopsy` dispatch probes in **parallel per-TTL waves** (`~2–5s` total runtime instead of sequential per-hop timeouts).
+   - Each probe uses a **unique per-hop / per-cycle `(ID, Seq)` tuple** for conntrack isolation so NAT gateways and stateful firewalls do not collide or misattribute replies across cycles.
+   - If ICMP Echo fails to elicit path replies, probes automatically step down **`ICMP -> TCP 443 -> TCP 80 -> UDP`** (`probe_mode`: `"icmp"`, `"tcp_443"`, `"tcp_80"`, `"udp"`).
+2. **Silent CoPP Transit Routers vs Genuine End-to-End Packet Loss**:
+   - Intermediate `*` hops where the destination is still cleanly reached reflect **silent CoPP (Control Plane Policing) / ICMP rate-limiting** transit routers—tracked in **`silent_transit_hops`**—and do **not** indicate downstream packet loss.
+   - Evaluate **`dest_loss_pct`** for actual end-to-end health: genuine destination loss **`>= 20%`** triggers **`WARN` / `FAIL`**, while isolated intermediate loss that vanishes at hop `N+1..dst` is benign.
+3. **Consolidated Autopsy**: Run `recipe_path_autopsy` when you need a single consolidated report combining differential stages, hop loss/jitter, and MTU ceiling—use `style: "quick"` (`<= 40` cols) for mobile or `style: "rich"` (`76` cols) for desktop review.

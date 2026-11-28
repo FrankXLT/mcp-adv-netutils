@@ -9,12 +9,14 @@
   <link rel="stylesheet" href="./vendor/quiet-evidence-bundle.css">
   <link rel="stylesheet" href="./tokens.css">
   <link rel="stylesheet" href="./studio.css">
+  <link rel="stylesheet" href="./studio_overlays.css">
   <script defer src="./vendor/echarts.min.js"></script>
   <script defer src="./vendor/quiet-evidence-bundle.js"></script>
   <script defer src="./charts.js"></script>
   <script defer src="./studio_destinations.js"></script>
   <script defer src="./studio_tool_views.js"></script>
   <script defer src="./studio_results.js"></script>
+  <script defer src="./studio_progress.js"></script>
   <script defer src="./studio.js"></script>
 </head>
 <body>
@@ -32,16 +34,28 @@
       </div>
     </nav>
     <div class="va-shell-actions topbar-utilities">
-      <div class="utility-control">
-        <label for="themeSelect" class="va-sr-only">Color Theme</label>
-        <select id="themeSelect" class="va-select va-select-compact">
-          <option value="white">Pure White</option><option value="paper">Warm Paper</option>
-          <option value="dark-paper">Dark Paper</option><option value="dark">Dark</option>
-        </select>
-      </div>
-      <div id="densityToggle" class="va-toolbar-joined va-tb-group va-segmented" role="group" aria-label="Display Density">
-        <button id="densityCompactBtn" class="va-tb-btn va-seg-btn" type="button" data-density="d3" aria-pressed="false">Compact</button>
-        <button id="densityComfortBtn" class="va-tb-btn va-seg-btn" type="button" data-density="d2" aria-pressed="true">Comfortable</button>
+      <button id="appearanceBtn" class="va-btn va-btn-ghost va-btn-sm appearance-trigger" type="button" popovertarget="appearancePopover" aria-controls="appearancePopover" aria-expanded="false" aria-label="Appearance settings">
+        <svg class="appearance-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="9" cy="6" r="2"></circle><circle cx="15" cy="12" r="2"></circle><circle cx="10" cy="18" r="2"></circle></svg>
+        <span>Appearance</span>
+        <svg class="appearance-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+      <div id="appearancePopover" class="va-popover appearance-popover" popover="auto" aria-label="Appearance settings">
+        <div class="appearance-section">
+          <div class="appearance-section-label">Color Theme</div>
+          <div id="themeOptionGroup" class="appearance-theme-list" role="group" aria-label="Color Theme">
+            <button id="themeOptWhite" class="appearance-theme-btn" type="button" data-theme-opt="white" aria-pressed="true"><span class="va-swatch-dot" data-swatch="white" aria-hidden="true"></span><span class="appearance-theme-name">Pure White</span><svg class="appearance-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            <button id="themeOptPaper" class="appearance-theme-btn" type="button" data-theme-opt="paper" aria-pressed="false"><span class="va-swatch-dot" data-swatch="paper" aria-hidden="true"></span><span class="appearance-theme-name">Warm Paper</span><svg class="appearance-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            <button id="themeOptDark" class="appearance-theme-btn" type="button" data-theme-opt="dark" aria-pressed="false"><span class="va-swatch-dot" data-swatch="dark" aria-hidden="true"></span><span class="appearance-theme-name">Dark</span><svg class="appearance-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+            <button id="themeOptDarkPaper" class="appearance-theme-btn" type="button" data-theme-opt="dark-paper" aria-pressed="false"><span class="va-swatch-dot" data-swatch="dark-paper" aria-hidden="true"></span><span class="appearance-theme-name">Dark Paper</span><svg class="appearance-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></button>
+          </div>
+        </div>
+        <div class="appearance-section">
+          <div class="appearance-section-label">Spacing</div>
+          <div id="densityToggle" class="va-toolbar-joined va-tb-group va-segmented appearance-density-group" role="group" aria-label="Display Density">
+            <button id="densityComfortBtn" class="va-tb-btn va-seg-btn" type="button" data-density="d2" aria-pressed="true">Comfortable</button>
+            <button id="densityCompactBtn" class="va-tb-btn va-seg-btn" type="button" data-density="d3" aria-pressed="false">Compact</button>
+          </div>
+        </div>
       </div>
       <button id="lockModeBtn" class="va-btn va-btn-ghost va-btn-sm" type="button" data-action="demo">Demo</button>
     </div>
@@ -106,6 +120,14 @@
         <span id="kpiHistorySizeVal" class="kpi-value kpi-value-compact tabular-nums">—</span>
         <span id="kpiHistorySizeMeta" class="kpi-meta tabular-nums">0 saved runs (30d limit)</span>
       </button>
+    </section>
+
+    <section id="runProgressCard" class="run-progress-card" role="status" aria-live="polite" aria-label="Active check progress" hidden>
+      <div class="run-progress-main">
+        <progress class="va-spinner" aria-label="Check in progress"></progress>
+        <div class="run-progress-copy"><strong id="runProgressLabel" class="run-progress-title">Running check…</strong><span id="runProgressHint" class="va-field-hint run-progress-hint">Probing destination and collecting telemetry.</span></div>
+      </div>
+      <div class="run-progress-actions"><span id="runProgressTimer" class="va-pill tabular-nums" data-variant="tag">0.0s</span><button id="runCancelBtn" class="va-btn va-btn-ghost va-btn-sm va-btn-danger-ghost" type="button">Cancel</button></div>
     </section>
 
     <section id="panelChecks" class="studio-panel" role="tabpanel" aria-labelledby="tabBtnChecks">
@@ -371,6 +393,13 @@
     <div class="va-modal-sheet-body modal-body">
       <div id="jobDrawerMeta" class="modal-meta tabular-nums"></div>
       <p id="jobDrawerSummary" class="result-summary-line"></p>
+      <div id="drawerProgressCard" class="run-progress-card" role="status" aria-live="polite" hidden>
+        <div class="run-progress-main">
+          <progress class="va-spinner" aria-label="Re-running check in progress"></progress>
+          <div class="run-progress-copy"><strong id="drawerProgressLabel" class="run-progress-title">Running fresh comparison…</strong><span id="drawerProgressHint" class="va-field-hint run-progress-hint">Measuring current target latency and status.</span></div>
+        </div>
+        <div class="run-progress-actions"><span id="drawerProgressTimer" class="va-pill tabular-nums" data-variant="tag">0.0s</span><button id="drawerCancelBtn" class="va-btn va-btn-ghost va-btn-sm va-btn-danger-ghost" type="button">Cancel</button></div>
+      </div>
       <article id="jobDrawerResultCard" class="va-figure-card">
         <div class="va-card-actions">
           <div class="va-chart-table-switch" role="group" aria-label="Past Run Display Mode">

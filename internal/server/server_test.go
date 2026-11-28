@@ -55,7 +55,7 @@ func TestSetupServerRegistersAll33ToolsAndDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, srv)
 	require.NotNil(t, disp)
-	assert.Equal(t, "2.0.1", disp.Version())
+	assert.Equal(t, "2.1.0", disp.Version())
 
 	tools := srv.ListTools()
 	canonical := disp.ToolNames()
@@ -96,6 +96,25 @@ func TestSetupServerRegistersAll33ToolsAndDefaults(t *testing.T) {
 	destActionProp, ok := destTool.Tool.InputSchema.Properties["action"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []string{"list", "save", "delete", "run"}, destActionProp["enum"])
+
+	digestTool := srv.GetTool("render_run_digest")
+	require.NotNil(t, digestTool)
+	expectedDigestProps := map[string]string{
+		"job_ids":        "array",
+		"window":         "string",
+		"since":          "string",
+		"until":          "string",
+		"target":         "string",
+		"tool_name":      "string",
+		"status":         "string",
+		"incidents_only": "boolean",
+		"limit":          "number",
+	}
+	for propName, wantType := range expectedDigestProps {
+		prop, hasProp := digestTool.Tool.InputSchema.Properties[propName].(map[string]any)
+		require.Truef(t, hasProp, "render_run_digest missing property %q", propName)
+		assert.Equalf(t, wantType, prop["type"], "render_run_digest property %q type", propName)
+	}
 }
 
 func TestSetupServerReusesProvidedDispatcher(t *testing.T) {

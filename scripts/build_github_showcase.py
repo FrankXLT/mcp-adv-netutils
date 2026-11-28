@@ -32,10 +32,12 @@ _REQUIRED_ROUTES = ("index.html", "demo/index.html", "docs/index.html")
 _DEMO_WEBUI_ASSETS = (
     "tokens.css",
     "studio.css",
+    "studio_overlays.css",
     "charts.js",
     "studio_destinations.js",
     "studio_tool_views.js",
     "studio_results.js",
+    "studio_progress.js",
     "studio.js",
 )
 _DEMO_VENDOR_ASSETS = (
@@ -73,7 +75,7 @@ _ALLOWED_PUBLIC_STRINGS = (
     "/home/dev",
 )
 
-_LAN_RE = re.compile(r"\b[a-z0-9-]+\.lan\b", re.I)
+_LAN_RE = re.compile(r"\b[a-z0-9-]+\.lan(?!\.example\b)\b", re.I)
 _RFC1918_RE = re.compile(
     r"\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
 )

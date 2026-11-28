@@ -1,0 +1,36 @@
+name: Feature Request
+description: Propose a new MCP tool, diagnostic capability, or /web Studio enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement to `mcp-adv-netutils`!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Use Case
+      description: Describe the network diagnostic problem or operational workflow gap this feature addresses.
+      placeholder: When troubleshooting X, I currently cannot...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_behavior
+    attributes:
+      label: Proposed MCP Tool / /web Studio Behavior
+      description: Describe the proposed MCP tool name/parameters, `/web` Studio UI behavior, or security/guardrail expectations.
+      placeholder: Add tool `...` or `/web` Studio panel that...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any workarounds, existing tools, or alternative designs you considered.
+      placeholder: Considered combining existing tools or external scripts, but...
+    validations:
+      required: false

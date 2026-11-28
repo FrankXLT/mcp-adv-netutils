@@ -78,15 +78,16 @@ type SnapshotRecord struct {
 
 // JobFilter specifies optional filters and pagination for ListJobs.
 type JobFilter struct {
-	ToolName      string
-	Target        string
-	Source        string
-	Status        string
-	Since         int64
-	Until         int64
-	Limit         int
-	Offset        int
-	IncidentsOnly bool
+	ToolName       string
+	Target         string
+	TargetContains string
+	Source         string
+	Status         string
+	Since          int64
+	Until          int64
+	Limit          int
+	Offset         int
+	IncidentsOnly  bool
 }
 
 // StoreStats reports row counts, disk usage, and SQLite pragma metrics.
@@ -143,7 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_source_created ON jobs(source, created_at);
 CREATE INDEX IF NOT EXISTS idx_saved_destinations_pinned ON saved_destinations(pinned DESC, updated_at DESC);`
 	insertJobSQL = `INSERT INTO jobs (job_id, tool_name, target, source, status, summary, payload_json, ascii_default, duration_ms, created_at, expires_at, is_incident, down_aged) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET tool_name=excluded.tool_name, target=excluded.target, source=excluded.source, status=excluded.status, summary=excluded.summary, payload_json=excluded.payload_json, ascii_default=excluded.ascii_default, duration_ms=excluded.duration_ms, created_at=excluded.created_at, expires_at=excluded.expires_at, is_incident=excluded.is_incident, down_aged=excluded.down_aged;`
 	getJobSQL    = `SELECT job_id, tool_name, target, source, status, summary, payload_json, ascii_default, duration_ms, created_at, expires_at, is_incident, down_aged FROM jobs WHERE job_id = ?;`
-	listJobsSQL  = `SELECT job_id, tool_name, target, source, status, summary, payload_json, ascii_default, duration_ms, created_at, expires_at, is_incident, down_aged FROM jobs WHERE (? = '' OR tool_name = ?) AND (? = '' OR target = ?) AND (? = '' OR source = ?) AND (? = '' OR UPPER(status) = UPPER(?)) AND (? = 0 OR created_at >= ?) AND (? = 0 OR created_at <= ?) AND (? = 0 OR is_incident = 1) ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?;`
+	listJobsSQL  = `SELECT job_id, tool_name, target, source, status, summary, payload_json, ascii_default, duration_ms, created_at, expires_at, is_incident, down_aged FROM jobs WHERE ` + jobFilterWhereClause + ` ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?;`
 )
 
 var (
@@ -330,12 +331,8 @@ func (s *JobStore) ListJobs(ctx context.Context, filter JobFilter) ([]JobRecord,
 	if limit <= 0 {
 		limit = defaultListLimit
 	}
-	rows, err := s.roDB.QueryContext(ctx, listJobsSQL,
-		filter.ToolName, filter.ToolName, filter.Target, filter.Target,
-		filter.Source, filter.Source, filter.Status, filter.Status,
-		filter.Since, filter.Since, filter.Until, filter.Until,
-		boolToInt(filter.IncidentsOnly), limit, max(filter.Offset, 0),
-	)
+	args := append(jobFilterArgs(filter), limit, max(filter.Offset, 0))
+	rows, err := s.roDB.QueryContext(ctx, listJobsSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs: %w", err)
 	}

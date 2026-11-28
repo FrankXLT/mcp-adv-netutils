@@ -55,11 +55,14 @@ type Request struct {
 
 // WhiskerPoint represents one min/avg/max RTT and packet loss sample for SVG whisker charts.
 type WhiskerPoint struct {
-	Label   string  `json:"label"`
-	MinMs   float64 `json:"minMs"`
-	AvgMs   float64 `json:"avgMs"`
-	MaxMs   float64 `json:"maxMs"`
-	LossPct float64 `json:"lossPct"`
+	Label    string  `json:"label"`
+	Segment  string  `json:"segment,omitempty"`
+	Hostname string  `json:"hostname,omitempty"`
+	Silent   bool    `json:"silent,omitempty"`
+	MinMs    float64 `json:"minMs"`
+	AvgMs    float64 `json:"avgMs"`
+	MaxMs    float64 `json:"maxMs"`
+	LossPct  float64 `json:"lossPct"`
 }
 
 // WaterfallPhase represents one timing phase bar for SVG latency waterfall charts.
@@ -474,9 +477,8 @@ func (d *Dispatcher) archiveOutcome(ctx context.Context, out *Outcome, source st
 }
 
 func isArchivableTool(tool string) bool {
-	return tool != "unlock_netutils" && tool != "lock_netutils" &&
-		tool != "get_job_report" && tool != "get_cron_status" &&
-		tool != "manage_saved_destinations"
+	return tool != "unlock_netutils" && tool != "lock_netutils" && tool != "get_job_report" &&
+		tool != "get_cron_status" && tool != "manage_saved_destinations" && tool != "render_run_digest"
 }
 
 func newJobID(createdAt int64) (string, error) {
